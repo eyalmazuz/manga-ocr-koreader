@@ -217,15 +217,15 @@ local function stageBinaryInDirectory(source_path, directory)
             end
             if not written or written <= 0 then
                 local error_number = ffi.errno()
-                if written == -1
-                        and error_number == posixConstant("EINTR", 4) then
-                    -- Retry the same bytes when a signal interrupts write(2).
-                else
+                local interrupted = written == -1
+                    and error_number == posixConstant("EINTR", 4)
+                if not interrupted then
                     return fail(errnoMessage(
                         "could not copy the worker to " .. runtime_path,
                         error_number
                     ))
                 end
+                -- Otherwise, retry the same bytes after an interrupted write.
             else
                 offset = offset + written
             end
