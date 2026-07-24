@@ -1,0 +1,41 @@
+# cargo-about 0.9.1 configuration for the worker binaries distributed by this
+# project. Licenses joined by OR are satisfied in this priority order.
+accepted = [
+    "Apache-2.0",
+    "MIT",
+    "BSD-3-Clause",
+    "BSD-2-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "CDLA-Permissive-2.0",
+    "0BSD",
+    "BSL-1.0",
+    "Unlicense",
+]
+
+# This is the union of the targets published by release.yml. Evaluating them
+# together intentionally produces one conservative report shared by every ZIP.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-musl",
+    "arm-unknown-linux-musleabi",
+    "arm-unknown-linux-musleabihf",
+]
+
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+ignore-transitive-dependencies = false
+private = { ignore = true }
+
+# These crates have multipart or missing published license files. cargo-about's
+# checksummed built-in clarifications preserve the applicable notices.
+workarounds = [
+    "prost",
+    "ring",
+    "rustls",
+]
+
+[ring]
+accepted = ["OpenSSL"]

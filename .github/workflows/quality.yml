@@ -1,0 +1,197 @@
+name: Quality
+
+on:
+  workflow_call:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust formatting, checks, and Clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust 1.90
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.90.0
+          components: rustfmt, clippy
+
+      - name: Cache Rust build data
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: backend -> backend/target
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path backend/Cargo.toml --all --check
+
+      - name: Check all Rust targets
+        run: cargo check --manifest-path backend/Cargo.toml --locked --workspace --all-targets --all-features
+
+      - name: Run Clippy
+        run: cargo clippy --manifest-path backend/Cargo.toml --locked --workspace --all-targets --all-features -- --deny warnings
+
+  lua:
+    name: Lua syntax and lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Install Lua 5.1 tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes lua5.1 lua-check
+
+      - name: Check Lua 5.1 syntax
+        run: find frontend/mangaocr.koplugin tests/lua -type f -name '*.lua' -print0 | xargs -0 -r -n1 luac5.1 -p
+
+      - name: Check plugin-local module namespace
+        run: |
+          invalid_modules="$(
+            find frontend/mangaocr.koplugin -maxdepth 1 -type f -name '*.lua' \
+              ! -name 'main.lua' \
+              ! -name '_meta.lua' \
+              ! -name '*_spec.lua' \
+              ! -name 'MangaOCR*.lua' \
+              -print
+          )"
+          if [[ -n "$invalid_modules" ]]; then
+            echo "plugin helper modules must use the MangaOCR prefix:" >&2
+            echo "$invalid_modules" >&2
+            exit 1
+          fi
+
+      - name: Run Luacheck
+        run: |
+          luacheck frontend/mangaocr.koplugin tests/lua \
+            --std luajit \
+            --globals G_defaults G_reader_settings \
+            --no-max-line-length \
+            --no-unused-args \
+            --no-unused-secondaries
+
+  shell:
+    name: Shell syntax and lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Install ShellCheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes shellcheck
+
+      - name: Check shell syntax
+        run: bash -n scripts/*.sh scripts/lib/*.sh
+
+      - name: Run ShellCheck
+        run: shellcheck scripts/*.sh scripts/lib/*.sh
+
+  supported-builds:
+    name: Build ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: native
+            builder: cargo
+          - target: x86_64-unknown-linux-musl
+            builder: cross
+          - target: aarch64-unknown-linux-musl
+            builder: cross
+          - target: arm-unknown-linux-musleabi
+            builder: cross
+          - target: arm-unknown-linux-musleabihf
+            builder: cross
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust 1.90
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.90.0
+
+      - name: Install cross
+        if: matrix.builder == 'cross'
+        uses: taiki-e/install-action@7572810d7dd469b651bb7793945692cf78da5dd7 # v2.85.0
+        with:
+          tool: cross@0.2.5
+          fallback: none
+
+      - name: Cache Rust build data
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: backend -> backend/target
+          key: ${{ matrix.target }}
+
+      - name: Build and package
+        env:
+          MANGAOCR_BUILDER: ${{ matrix.builder }}
+        run: scripts/build-release.sh "${{ matrix.target }}"
+
+      - name: Verify package
+        run: |
+          target="${{ matrix.target }}"
+          archive="dist/mangaocr-${target}.zip"
+          worker="dist/${target}/mangaocr.koplugin/mangaocr-worker"
+
+          test -x "$worker"
+          unzip -tqq "$archive"
+
+          archive_entries="$(unzip -Z1 "$archive")"
+          for required_entry in \
+            mangaocr.koplugin/mangaocr-worker \
+            mangaocr.koplugin/LICENSE \
+            mangaocr.koplugin/LICENSE.Manatan \
+            mangaocr.koplugin/LICENSE.chrome_lens_ocr \
+            mangaocr.koplugin/LICENSE.mokuroreader-koreader \
+            mangaocr.koplugin/THIRD_PARTY_LICENSES.html \
+            mangaocr.koplugin/THIRD_PARTY_NOTICES.md
+          do
+            grep -Fxq "$required_entry" <<<"$archive_entries"
+          done
+
+          if grep -Eq '_spec\.lua$' <<<"$archive_entries"; then
+            echo "test specs must not be included in release packages" >&2
+            exit 1
+          fi
+
+          if [[ "$target" != "native" ]]; then
+            program_headers="$(readelf --program-headers "$worker")"
+            if grep -q INTERP <<<"$program_headers"; then
+              echo "portable worker unexpectedly contains a dynamic program interpreter" >&2
+              exit 1
+            fi
+          fi

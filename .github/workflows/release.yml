@@ -1,0 +1,208 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  quality:
+    name: Quality gate
+    uses: ./.github/workflows/quality.yml
+
+  tests:
+    name: Test gate
+    uses: ./.github/workflows/tests.yml
+
+  validate:
+    name: Validate release tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust 1.90
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.90.0
+
+      - name: Match tag to Cargo package version
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "release tag must be a semantic version such as v0.1.0" >&2
+            exit 1
+          fi
+
+          package_version="$(
+            cargo metadata \
+              --manifest-path backend/Cargo.toml \
+              --locked \
+              --no-deps \
+              --format-version 1 |
+              jq -r '.packages[] | select(.name == "mangaocr-worker") | .version'
+          )"
+          if [[ "$GITHUB_REF_NAME" != "v${package_version}" ]]; then
+            echo "tag ${GITHUB_REF_NAME} does not match Cargo version ${package_version}" >&2
+            exit 1
+          fi
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs:
+      - quality
+      - tests
+      - validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: native
+            builder: cargo
+          - target: x86_64-unknown-linux-musl
+            builder: cross
+          - target: aarch64-unknown-linux-musl
+            builder: cross
+          - target: arm-unknown-linux-musleabi
+            builder: cross
+          - target: arm-unknown-linux-musleabihf
+            builder: cross
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust 1.90
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.90.0
+
+      - name: Install cross
+        if: matrix.builder == 'cross'
+        uses: taiki-e/install-action@7572810d7dd469b651bb7793945692cf78da5dd7 # v2.85.0
+        with:
+          tool: cross@0.2.5
+          fallback: none
+
+      - name: Cache Rust build data
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: backend -> backend/target
+          key: ${{ matrix.target }}
+
+      - name: Build and package
+        env:
+          MANGAOCR_BUILDER: ${{ matrix.builder }}
+        run: scripts/build-release.sh "${{ matrix.target }}"
+
+      - name: Verify package
+        run: |
+          target="${{ matrix.target }}"
+          archive="dist/mangaocr-${target}.zip"
+          worker="dist/${target}/mangaocr.koplugin/mangaocr-worker"
+
+          test -x "$worker"
+          unzip -tqq "$archive"
+
+          archive_entries="$(unzip -Z1 "$archive")"
+          for required_entry in \
+            mangaocr.koplugin/mangaocr-worker \
+            mangaocr.koplugin/LICENSE \
+            mangaocr.koplugin/LICENSE.Manatan \
+            mangaocr.koplugin/LICENSE.chrome_lens_ocr \
+            mangaocr.koplugin/LICENSE.mokuroreader-koreader \
+            mangaocr.koplugin/THIRD_PARTY_LICENSES.html \
+            mangaocr.koplugin/THIRD_PARTY_NOTICES.md
+          do
+            grep -Fxq "$required_entry" <<<"$archive_entries"
+          done
+
+          if grep -Eq '_spec\.lua$' <<<"$archive_entries"; then
+            echo "test specs must not be included in release packages" >&2
+            exit 1
+          fi
+
+          if [[ "$target" != "native" ]]; then
+            program_headers="$(readelf --program-headers "$worker")"
+            if grep -q INTERP <<<"$program_headers"; then
+              echo "portable worker unexpectedly contains a dynamic program interpreter" >&2
+              exit 1
+            fi
+          fi
+
+      - name: Upload plugin archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mangaocr-${{ matrix.target }}
+          path: dist/mangaocr-${{ matrix.target }}.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  publish:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Download plugin archives
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: mangaocr-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Verify complete release set
+        run: |
+          expected_archives=(
+            mangaocr-native.zip
+            mangaocr-x86_64-unknown-linux-musl.zip
+            mangaocr-aarch64-unknown-linux-musl.zip
+            mangaocr-arm-unknown-linux-musleabi.zip
+            mangaocr-arm-unknown-linux-musleabihf.zip
+          )
+          for archive in "${expected_archives[@]}"; do
+            test -f "artifacts/$archive"
+          done
+
+          shopt -s nullglob
+          actual_archives=(artifacts/mangaocr-*.zip)
+          if (( ${#actual_archives[@]} != ${#expected_archives[@]} )); then
+            echo "expected ${#expected_archives[@]} release archives, found ${#actual_archives[@]}" >&2
+            exit 1
+          fi
+
+      - name: Generate checksums
+        working-directory: artifacts
+        run: |
+          sha256sum mangaocr-*.zip > SHA256SUMS
+          sha256sum --check SHA256SUMS
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          name: Manga OCR ${{ github.ref_name }}
+          files: |
+            artifacts/mangaocr-*.zip
+            artifacts/SHA256SUMS
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}

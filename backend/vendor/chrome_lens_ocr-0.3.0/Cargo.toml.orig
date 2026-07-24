@@ -1,0 +1,30 @@
+[package]
+name = "chrome_lens_ocr"
+version = "0.3.0"
+edition = "2024"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/KolbyML/chrome-lens-ocr"
+description = "Port of chrome-lens-py used in Mangatan"
+rust-version = "1.90.0"
+
+[dependencies]
+anyhow = "1.0"
+bytes = "1"
+env_logger = "0.11"
+image = { version = "=0.25.9", default-features = false, features = [
+    "bmp",
+    "gif",
+    "jpeg",
+    "png",
+    "pnm",
+    "tiff",
+    "webp",
+] }
+log = "0.4"
+prost = "0.14"
+rand = "0.9"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+thiserror = "2.0"
+tokio = { version = "1", features = ["full"] }
+url = "2.4"

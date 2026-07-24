@@ -1,0 +1,10 @@
+/dist/
+/backend/target/
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.log
+*.tmp

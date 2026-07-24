@@ -1,0 +1,72 @@
+name: Bug report
+description: Report a reproducible Manga OCR problem
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please remove private manga paths or OCR text that you do not want to publish.
+
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Manga OCR version
+      description: Release tag or commit hash
+    validations:
+      required: true
+
+  - type: input
+    id: koreader-version
+    attributes:
+      label: KOReader version
+    validations:
+      required: true
+
+  - type: input
+    id: device
+    attributes:
+      label: Device and platform
+      description: For example, Kindle Basic 10th generation / KT4
+    validations:
+      required: true
+
+  - type: dropdown
+    id: artifact
+    attributes:
+      label: Installed release artifact
+      options:
+        - mangaocr-arm-unknown-linux-musleabihf.zip
+        - mangaocr-arm-unknown-linux-musleabi.zip
+        - mangaocr-aarch64-unknown-linux-musl.zip
+        - mangaocr-x86_64-unknown-linux-musl.zip
+        - mangaocr-native.zip
+        - Source/development build
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Open...
+        2. Choose...
+        3. Observe...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or screenshots
+      description: Remove private file paths or text before posting.
+      render: text
