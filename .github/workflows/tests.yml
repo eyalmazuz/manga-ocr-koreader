@@ -1,0 +1,79 @@
+name: Tests
+
+on:
+  workflow_call:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust tests (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: Linux x86_64
+            runner: ubuntu-latest
+          - platform: Windows x86_64
+            runner: windows-2025
+          - platform: macOS Intel
+            runner: macos-15-intel
+          - platform: macOS Apple Silicon
+            runner: macos-15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust 1.90
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.90.0
+
+      - name: Cache Rust build data
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: backend -> backend/target
+          key: tests-${{ matrix.runner }}
+
+      - name: Run Rust tests
+        run: cargo test --manifest-path backend/Cargo.toml --locked --workspace --all-targets --all-features
+
+  lua:
+    name: Lua unit tests on LuaJIT
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Lua test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes luajit lua-busted lua-filesystem lua-dkjson
+
+      - name: Run Lua tests
+        env:
+          LUA_PATH: ${{ github.workspace }}/frontend/mangaocr.koplugin/?.lua;;
+        run: |
+          luajit "$(command -v busted)" \
+            --helper="${{ github.workspace }}/tests/lua/busted_helper.lua" \
+            frontend/mangaocr.koplugin

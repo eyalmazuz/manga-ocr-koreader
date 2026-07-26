@@ -1,0 +1,201 @@
+name: Quality
+
+on:
+  workflow_call:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust checks (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: Linux x86_64
+            runner: ubuntu-latest
+          - platform: Windows x86_64
+            runner: windows-2025
+          - platform: macOS Intel
+            runner: macos-15-intel
+          - platform: macOS Apple Silicon
+            runner: macos-15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust 1.90
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.90.0
+          components: rustfmt, clippy
+
+      - name: Cache Rust build data
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: backend -> backend/target
+          key: quality-${{ matrix.runner }}
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path backend/Cargo.toml --all --check
+
+      - name: Check all Rust targets
+        run: cargo check --manifest-path backend/Cargo.toml --locked --workspace --all-targets --all-features
+
+      - name: Run Clippy
+        run: cargo clippy --manifest-path backend/Cargo.toml --locked --workspace --all-targets --all-features -- --deny warnings
+
+  lua:
+    name: Lua syntax and lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Lua 5.1 tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes lua5.1 lua-check
+
+      - name: Check Lua 5.1 syntax
+        run: find frontend/mangaocr.koplugin tests/lua -type f -name '*.lua' -print0 | xargs -0 -r -n1 luac5.1 -p
+
+      - name: Check plugin-local module namespace
+        run: |
+          invalid_modules="$(
+            find frontend/mangaocr.koplugin -maxdepth 1 -type f -name '*.lua' \
+              ! -name 'main.lua' \
+              ! -name '_meta.lua' \
+              ! -name '*_spec.lua' \
+              ! -name 'MangaOCR*.lua' \
+              -print
+          )"
+          if [[ -n "$invalid_modules" ]]; then
+            echo "plugin helper modules must use the MangaOCR prefix:" >&2
+            echo "$invalid_modules" >&2
+            exit 1
+          fi
+
+      - name: Run Luacheck
+        run: |
+          luacheck frontend/mangaocr.koplugin tests/lua \
+            --std luajit \
+            --globals G_defaults G_reader_settings \
+            --no-max-line-length \
+            --no-unused-args \
+            --no-unused-secondaries
+
+  shell:
+    name: Shell syntax and lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install ShellCheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes shellcheck
+
+      - name: Check shell syntax
+        run: bash -n scripts/*.sh scripts/lib/*.sh
+
+      - name: Run ShellCheck
+        run: shellcheck scripts/*.sh scripts/lib/*.sh
+
+  supported-builds:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: native
+            builder: cargo
+            runner: ubuntu-latest
+            deployment_target: ""
+          - target: x86_64-unknown-linux-musl
+            builder: cross
+            runner: ubuntu-latest
+            deployment_target: ""
+          - target: aarch64-unknown-linux-musl
+            builder: cross
+            runner: ubuntu-latest
+            deployment_target: ""
+          - target: arm-unknown-linux-musleabi
+            builder: cross
+            runner: ubuntu-latest
+            deployment_target: ""
+          - target: arm-unknown-linux-musleabihf
+            builder: cross
+            runner: ubuntu-latest
+            deployment_target: ""
+          - target: x86_64-apple-darwin
+            builder: cargo
+            runner: macos-15-intel
+            deployment_target: "10.12"
+          - target: aarch64-apple-darwin
+            builder: cargo
+            runner: macos-15
+            deployment_target: "11.0"
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust 1.90
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.90.0
+
+      - name: Install Apple Rust target
+        if: contains(matrix.target, 'apple-darwin')
+        run: rustup target add "${{ matrix.target }}"
+
+      - name: Install cross
+        if: matrix.builder == 'cross'
+        uses: taiki-e/install-action@7572810d7dd469b651bb7793945692cf78da5dd7 # v2.85.0
+        with:
+          tool: cross@0.2.5
+          fallback: none
+
+      - name: Cache Rust build data
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: backend -> backend/target
+          key: ${{ matrix.target }}
+
+      - name: Build and package
+        env:
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.deployment_target }}
+          MANGAOCR_BUILDER: ${{ matrix.builder }}
+        run: scripts/build-release.sh "${{ matrix.target }}"
+
+      - name: Verify package
+        run: scripts/verify-package.sh "${{ matrix.target }}"
