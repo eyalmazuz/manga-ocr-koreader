@@ -15,6 +15,13 @@ describe("Manga OCR region layout", function()
         )
     end)
 
+    it("keeps multiple vertical columns in one selectable grid", function()
+        assert.are.equal(
+            "  あ  何\nい  や\nつ  っ",
+            Layout.verticalGridText({ "あいつ", "何やっ" }, "  ", "  ")
+        )
+    end)
+
     it("places vertical lines from right to left", function()
         assert.are.same(
             { "右", "中", "左" },

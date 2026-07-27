@@ -8,7 +8,6 @@ local Font = require("ui/font")
 local FrameContainer = require("ui/widget/container/framecontainer")
 local Geom = require("ui/geometry")
 local GestureRange = require("ui/gesturerange")
-local HorizontalGroup = require("ui/widget/horizontalgroup")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local MovableContainer = require("ui/widget/container/movablecontainer")
 local RegionLayout = require("MangaOCRRegionLayout")
@@ -16,7 +15,6 @@ local Selection = require("MangaOCRSelection")
 local ScrollTextWidget = require("ui/widget/scrolltextwidget")
 local Size = require("ui/size")
 local UIManager = require("ui/uimanager")
-local HorizontalSpan = require("ui/widget/horizontalspan")
 
 local Screen = Device.screen
 local SELECTION_PADDING = "  "
@@ -26,7 +24,6 @@ local REGION_HEIGHT_RATIO = 0.72
 local REGION_SCALE = 1.3
 local REGION_MIN_WIDTH = 120
 local REGION_MIN_HEIGHT = 100
-local REGION_COLUMN_GAP = Screen:scaleBySize(8)
 local DEFAULT_REGION_FONT_SIZE = 44
 local MIN_REGION_FONT_SIZE = 16
 
@@ -54,11 +51,16 @@ local function verticalMetrics(lines, font_size)
         math.floor(font_size * 1.75),
         font_size + 2 * Size.padding.small
     )
+    local column_gap = math.max(
+        Screen:scaleBySize(8),
+        math.floor(font_size * 0.5)
+    )
     local line_height = math.max(1, math.floor(font_size * 1.3))
     return {
         column_width = column_width,
+        column_gap = column_gap,
         line_height = line_height,
-        width = #lines * column_width + math.max(0, #lines - 1) * REGION_COLUMN_GAP,
+        width = #lines * column_width + math.max(0, #lines - 1) * column_gap,
         height = max_characters * line_height,
     }
 end
@@ -151,66 +153,40 @@ function TextPopup:init()
             content_width = math.min(maximum_content_width, metrics.width)
             content_height = math.min(maximum_content_height, metrics.height)
             local column_width = metrics.column_width
-            local column_gap = math.max(
-                Size.padding.small,
-                math.floor(font_size * 0.18),
-                REGION_COLUMN_GAP
-            )
-            local group_width = #lines * column_width
-                + math.max(0, #lines - 1) * column_gap
-            if group_width > content_width then
-                column_gap = math.max(
-                    0,
-                    math.floor((content_width - #lines * column_width)
-                        / math.max(1, #lines - 1))
-                )
-            end
-
-            self.content_widget = HorizontalGroup:new{
-                align = "top",
-                allow_mirroring = false,
+            local text_widget = ScrollTextWidget:new{
+                -- Render all columns in one text widget. Newlines form the
+                -- rows while the separators preserve the visual columns;
+                -- this keeps the popup a single selectable text box.
+                text = RegionLayout.verticalGridText(
+                    lines,
+                    SELECTION_PADDING,
+                    " "
+                ),
+                face = Font:getFace("cfont", font_size),
+                width = math.min(
+                    content_width,
+                    metrics.width
+                ),
+                height = content_height,
+                scroll_bar_width = 0,
+                text_scroll_span = 0,
+                dialog = self,
+                justified = false,
+                para_direction_rtl = false,
+                auto_para_direction = false,
+                alignment = "center",
+                lang = language,
+                highlight_text_selection = true,
             }
-            for index, line in ipairs(lines) do
-                -- Each OCR line becomes a top-to-bottom column. The visual
-                -- order is reversed by orderedVerticalLines so the first
-                -- Japanese reading column appears on the right.
-                local line_height = math.min(
-                    content_height,
-                    math.max(
-                        metrics.line_height,
-                        RegionLayout.utf8Length(line) * metrics.line_height
-                    )
+            if language:match("^ja") then
+                Selection.enableExactXtextRanges(
+                    text_widget.text_widget,
+                    FIRST_TEXT_INDEX
                 )
-                local text_widget = ScrollTextWidget:new{
-                    text = RegionLayout.verticalColumnText(line, SELECTION_PADDING),
-                    face = Font:getFace("cfont", font_size),
-                    width = column_width,
-                    height = line_height,
-                    scroll_bar_width = 0,
-                    text_scroll_span = 0,
-                    dialog = self,
-                    justified = false,
-                    para_direction_rtl = false,
-                    auto_para_direction = false,
-                    alignment = "center",
-                    lang = language,
-                    highlight_text_selection = true,
-                }
-                if language:match("^ja") then
-                    Selection.enableExactXtextRanges(
-                        text_widget.text_widget,
-                        FIRST_TEXT_INDEX
-                    )
-                end
-                self.text_widgets[#self.text_widgets + 1] = text_widget
-                self.content_widget[#self.content_widget + 1] = text_widget
-                if index < #lines then
-                    self.content_widget[#self.content_widget + 1] = HorizontalSpan:new{
-                        width = column_gap,
-                    }
-                end
             end
-            self.vertical_popup = #self.text_widgets > 0
+            self.text_widgets[1] = text_widget
+            self.content_widget = text_widget
+            self.vertical_popup = true
         end
         -- Empty or malformed line data should still leave a usable popup.
         if #self.text_widgets == 0 then

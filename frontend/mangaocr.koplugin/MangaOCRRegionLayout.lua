@@ -39,6 +39,38 @@ function Layout.verticalColumnText(text, prefix)
     return (prefix or "") .. table.concat(characters, "\n")
 end
 
+function Layout.verticalGridText(lines, prefix, separator)
+    if type(lines) ~= "table" or #lines == 0 then
+        return prefix or ""
+    end
+
+    separator = separator or " "
+    local columns = {}
+    local row_count = 0
+    for index, line in ipairs(lines) do
+        if type(line) == "string" then
+            columns[index] = splitUtf8(line)
+            row_count = math.max(row_count, #columns[index])
+        else
+            columns[index] = {}
+        end
+    end
+
+    local rows = {}
+    for row = 1, row_count do
+        local cells = {}
+        for column = 1, #columns do
+            cells[#cells + 1] = columns[column][row] or ""
+        end
+        local row_text = table.concat(cells, separator)
+        if row == 1 then
+            row_text = (prefix or "") .. row_text
+        end
+        rows[#rows + 1] = row_text
+    end
+    return table.concat(rows, "\n")
+end
+
 function Layout.orderedVerticalLines(lines)
     if type(lines) ~= "table" then
         return {}
