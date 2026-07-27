@@ -11,6 +11,12 @@ All notable changes to this project are documented here. The format follows
 - An optional enlarged OCR-region popup that keeps selectable text near the
   tapped region and lays out vertical Japanese columns right-to-left.
 
+### Changed
+
+- Region popups now size themselves from the tapped OCR box and the amount of
+  text, keeping short columns compact instead of stretching them across most
+  of the screen.
+
 ## [0.3.0] - 2026-07-27
 
 ### Added

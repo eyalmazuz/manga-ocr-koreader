@@ -16,14 +16,52 @@ local Selection = require("MangaOCRSelection")
 local ScrollTextWidget = require("ui/widget/scrolltextwidget")
 local Size = require("ui/size")
 local UIManager = require("ui/uimanager")
+local HorizontalSpan = require("ui/widget/horizontalspan")
 
 local Screen = Device.screen
 local SELECTION_PADDING = "  "
 local FIRST_TEXT_INDEX = 3
 local REGION_WIDTH_RATIO = 0.86
 local REGION_HEIGHT_RATIO = 0.72
-local DEFAULT_REGION_FONT_SIZE = 52
+local REGION_SCALE = 1.3
+local REGION_MIN_WIDTH = 120
+local REGION_MIN_HEIGHT = 100
+local REGION_COLUMN_GAP = Screen:scaleBySize(8)
+local DEFAULT_REGION_FONT_SIZE = 44
 local MIN_REGION_FONT_SIZE = 24
+
+local function scaledRegionLimit(anchor, field, minimum, maximum, fallback)
+    local source = anchor and anchor[field]
+    if type(source) ~= "number" or source <= 0 then
+        source = fallback
+    end
+    return math.min(
+        maximum,
+        math.max(minimum, math.floor(source * REGION_SCALE))
+    )
+end
+
+local function verticalMetrics(lines, font_size)
+    local max_characters = 1
+    for _, line in ipairs(lines) do
+        max_characters = math.max(max_characters, RegionLayout.utf8Length(line))
+    end
+
+    -- A compact column still needs room for the leading selection padding and
+    -- one glyph. The old layout divided most of the screen between columns,
+    -- which made short regions look disconnected from the tapped source.
+    local column_width = math.max(
+        math.floor(font_size * 1.75),
+        font_size + 2 * Size.padding.small
+    )
+    local line_height = math.max(1, math.floor(font_size * 1.3))
+    return {
+        column_width = column_width,
+        line_height = line_height,
+        width = #lines * column_width + math.max(0, #lines - 1) * REGION_COLUMN_GAP,
+        height = max_characters * line_height,
+    }
+end
 
 local function readFontSize(setting, default)
     local value = G_reader_settings:readSetting(setting, default)
@@ -46,14 +84,29 @@ local TextPopup = InputContainer:extend{
 
 function TextPopup:init()
     local is_region = self.region_mode == true and self.anchor ~= nil
-    local width = is_region
-        and math.floor(Screen:getWidth() * REGION_WIDTH_RATIO)
-        or Screen:getWidth()
-    local height = is_region
-        and math.floor(Screen:getHeight() * REGION_HEIGHT_RATIO)
-        or math.floor(Screen:getHeight() / 3)
     local padding = Size.padding.large
     local border = Size.border.window
+    local width
+    local height
+    if is_region then
+        width = scaledRegionLimit(
+            self.anchor,
+            "w",
+            Screen:scaleBySize(REGION_MIN_WIDTH),
+            math.floor(Screen:getWidth() * REGION_WIDTH_RATIO),
+            math.floor(Screen:getWidth() * 0.45)
+        )
+        height = scaledRegionLimit(
+            self.anchor,
+            "h",
+            Screen:scaleBySize(REGION_MIN_HEIGHT),
+            math.floor(Screen:getHeight() * REGION_HEIGHT_RATIO),
+            math.floor(Screen:getHeight() * 0.35)
+        )
+    else
+        width = Screen:getWidth()
+        height = math.floor(Screen:getHeight() / 3)
+    end
     local content_width = math.max(1, width - 2 * padding - 2 * border)
     local content_height = math.max(1, height - 2 * padding - 2 * border)
     local font_size = is_region
@@ -69,46 +122,82 @@ function TextPopup:init()
 
     if self.vertical_popup and type(self.lines) == "table" then
         local lines = RegionLayout.orderedVerticalLines(self.lines)
-        local column_count = math.max(1, #lines)
-        local column_width = math.max(1, math.floor(content_width / column_count))
-        local maximum_font_size = column_width - 2 * Size.padding.small
-        if maximum_font_size >= MIN_REGION_FONT_SIZE then
-            font_size = math.min(font_size, maximum_font_size)
-        else
-            font_size = MIN_REGION_FONT_SIZE
-        end
-        column_width = math.max(column_width, font_size + 2 * Size.padding.small)
-        self.content_widget = HorizontalGroup:new{
-            align = "top",
-            allow_mirroring = false,
-        }
-        for _, line in ipairs(lines) do
-            local text_widget = ScrollTextWidget:new{
+        if #lines > 0 then
+            local metrics = verticalMetrics(lines, font_size)
+            -- Fit a region to a bounded enlargement of the source box. The
+            -- font is reduced only when the text would exceed that bound; the
+            -- resulting widget uses the text's natural dimensions, so short
+            -- regions do not become full-screen panels.
+            while font_size > MIN_REGION_FONT_SIZE
+                    and (metrics.width > content_width
+                        or metrics.height > content_height) do
+                font_size = font_size - 1
+                metrics = verticalMetrics(lines, font_size)
+            end
+
+            content_width = math.min(content_width, metrics.width)
+            content_height = math.min(content_height, metrics.height)
+            local column_width = metrics.column_width
+            local column_gap = math.max(
+                Size.padding.small,
+                math.floor(font_size * 0.18),
+                REGION_COLUMN_GAP
+            )
+            local group_width = #lines * column_width
+                + math.max(0, #lines - 1) * column_gap
+            if group_width > content_width then
+                column_gap = math.max(
+                    0,
+                    math.floor((content_width - #lines * column_width)
+                        / math.max(1, #lines - 1))
+                )
+            end
+
+            self.content_widget = HorizontalGroup:new{
+                align = "top",
+                allow_mirroring = false,
+            }
+            for index, line in ipairs(lines) do
                 -- Each OCR line becomes a top-to-bottom column. The visual
                 -- order is reversed by orderedVerticalLines so the first
                 -- Japanese reading column appears on the right.
-                text = RegionLayout.verticalColumnText(line, SELECTION_PADDING),
-                face = Font:getFace("cfont", font_size),
-                width = column_width,
-                height = content_height,
-                scroll_bar_width = 0,
-                text_scroll_span = 0,
-                dialog = self,
-                justified = false,
-                para_direction_rtl = false,
-                auto_para_direction = false,
-                alignment = "center",
-                lang = language,
-                highlight_text_selection = true,
-            }
-            if language:match("^ja") then
-                Selection.enableExactXtextRanges(
-                    text_widget.text_widget,
-                    FIRST_TEXT_INDEX
+                local line_height = math.min(
+                    content_height,
+                    math.max(
+                        metrics.line_height,
+                        RegionLayout.utf8Length(line) * metrics.line_height
+                    )
                 )
+                local text_widget = ScrollTextWidget:new{
+                    text = RegionLayout.verticalColumnText(line, SELECTION_PADDING),
+                    face = Font:getFace("cfont", font_size),
+                    width = column_width,
+                    height = line_height,
+                    scroll_bar_width = 0,
+                    text_scroll_span = 0,
+                    dialog = self,
+                    justified = false,
+                    para_direction_rtl = false,
+                    auto_para_direction = false,
+                    alignment = "center",
+                    lang = language,
+                    highlight_text_selection = true,
+                }
+                if language:match("^ja") then
+                    Selection.enableExactXtextRanges(
+                        text_widget.text_widget,
+                        FIRST_TEXT_INDEX
+                    )
+                end
+                self.text_widgets[#self.text_widgets + 1] = text_widget
+                self.content_widget[#self.content_widget + 1] = text_widget
+                if index < #lines then
+                    self.content_widget[#self.content_widget + 1] = HorizontalSpan:new{
+                        width = column_gap,
+                    }
+                end
             end
-            self.text_widgets[#self.text_widgets + 1] = text_widget
-            self.content_widget[#self.content_widget + 1] = text_widget
+            self.vertical_popup = #self.text_widgets > 0
         end
         -- Empty or malformed line data should still leave a usable popup.
         if #self.text_widgets == 0 then

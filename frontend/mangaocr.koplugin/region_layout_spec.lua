@@ -3,6 +3,11 @@
 local Layout = require("MangaOCRRegionLayout")
 
 describe("Manga OCR region layout", function()
+    it("counts Unicode characters rather than UTF-8 bytes", function()
+        assert.are.equal(3, Layout.utf8Length("俺がい"))
+        assert.are.equal(0, Layout.utf8Length(""))
+    end)
+
     it("keeps UTF-8 characters intact in a vertical column", function()
         assert.are.equal(
             "  俺\nが\nい",

@@ -21,6 +21,13 @@ local function splitUtf8(text)
     return characters
 end
 
+function Layout.utf8Length(text)
+    if type(text) ~= "string" then
+        return 0
+    end
+    return #splitUtf8(text)
+end
+
 function Layout.verticalColumnText(text, prefix)
     if type(text) ~= "string" then
         return prefix or ""
