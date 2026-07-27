@@ -33,6 +33,8 @@ them, and generated OCR survives plugin upgrades.
   continue.
 - Group nearby vertical columns or horizontal rows into useful tappable text
   regions.
+- Open an enlarged selectable text view over the tapped region, with
+  vertical Japanese columns laid out right-to-left.
 - Hide furigana while preserving ordinary hiragana and katakana dialogue.
 - Use KOReader's normal dictionary and Wikipedia lookup flow.
 - Read generated, adjacent, or archive-embedded `.mokuro` data.
@@ -179,8 +181,10 @@ user storage.
 2. Select **Scan manga with Google Lens**.
 3. Accept the privacy notice and connect Wi-Fi when prompted.
 4. Wait for the scan to finish, then open the manga.
-5. Tap a detected text region to open selectable text and use KOReader's
-   dictionary actions.
+5. Tap a detected text region to open one enlarged selectable view and use
+   KOReader's dictionary actions. The view follows the OCR orientation:
+   horizontal text stays horizontal, while vertical Japanese columns are
+   displayed top-to-bottom and right-to-left.
 
 If a scan already exists, the long-press menu also offers **Rescan manga**,
 **Retry failed pages**, and **Delete Manga OCR cache** when applicable.
@@ -198,6 +202,8 @@ Open the **Manga OCR** entry in KOReader's reader menu. It provides:
 - **Retry failed pages** — scans only recorded failures;
 - **Reload OCR data**;
 - **Enable OCR hotspots**;
+- **Show enlarged OCR text over the tapped region** — enabled by default;
+  disable it to use the original bottom text panel;
 - **Show OCR box outlines**;
 - **Hide furigana (small kana readings)**;
 - **OCR language** — Japanese or English; and
