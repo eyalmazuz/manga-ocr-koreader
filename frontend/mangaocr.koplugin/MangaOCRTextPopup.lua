@@ -28,7 +28,7 @@ local REGION_MIN_WIDTH = 120
 local REGION_MIN_HEIGHT = 100
 local REGION_COLUMN_GAP = Screen:scaleBySize(8)
 local DEFAULT_REGION_FONT_SIZE = 44
-local MIN_REGION_FONT_SIZE = 24
+local MIN_REGION_FONT_SIZE = 16
 
 local function scaledRegionLimit(anchor, field, minimum, maximum, fallback)
     local source = anchor and anchor[field]
@@ -135,8 +135,21 @@ function TextPopup:init()
                 metrics = verticalMetrics(lines, font_size)
             end
 
-            content_width = math.min(content_width, metrics.width)
-            content_height = math.min(content_height, metrics.height)
+            -- The source box is a sizing hint, not a clipping rectangle. If
+            -- the minimum readable font still needs more room, let the popup
+            -- grow to the natural text size so the last column is not hidden.
+            local maximum_content_width = math.max(
+                1,
+                math.floor(Screen:getWidth() * REGION_WIDTH_RATIO)
+                    - 2 * padding - 2 * border
+            )
+            local maximum_content_height = math.max(
+                1,
+                math.floor(Screen:getHeight() * REGION_HEIGHT_RATIO)
+                    - 2 * padding - 2 * border
+            )
+            content_width = math.min(maximum_content_width, metrics.width)
+            content_height = math.min(maximum_content_height, metrics.height)
             local column_width = metrics.column_width
             local column_gap = math.max(
                 Size.padding.small,
