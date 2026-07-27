@@ -53,7 +53,7 @@ local function verticalMetrics(lines, font_size)
     )
     local column_gap = math.max(
         Screen:scaleBySize(8),
-        math.floor(font_size * 0.5)
+        math.floor(font_size)
     )
     local line_height = math.max(1, math.floor(font_size * 1.3))
     return {
@@ -73,7 +73,7 @@ local function readFontSize(setting, default)
     return math.floor(value)
 end
 
-    local TextPopup = InputContainer:extend{
+local TextPopup = InputContainer:extend{
     modal = false,
     text = "",
     lines = nil,
@@ -82,7 +82,18 @@ end
     anchor = nil,
     on_selection = nil,
     close_callback = nil,
+    vertical_grid = nil,
 }
+
+local function copyPosition(position)
+    if not position then
+        return nil
+    end
+    return Geom:new{
+        x = position.x,
+        y = position.y,
+    }
+end
 
 function TextPopup:init()
     local is_region = self.region_mode == true and self.anchor ~= nil
@@ -153,15 +164,16 @@ function TextPopup:init()
             content_width = math.min(maximum_content_width, metrics.width)
             content_height = math.min(maximum_content_height, metrics.height)
             local column_width = metrics.column_width
+            self.vertical_grid = RegionLayout.verticalGrid(
+                lines,
+                SELECTION_PADDING,
+                RegionLayout.FULLWIDTH_SPACE
+            )
             local text_widget = ScrollTextWidget:new{
                 -- Render all columns in one text widget. Newlines form the
                 -- rows while the separators preserve the visual columns;
                 -- this keeps the popup a single selectable text box.
-                text = RegionLayout.verticalGridText(
-                    lines,
-                    SELECTION_PADDING,
-                    " "
-                ),
+                text = self.vertical_grid.text,
                 face = Font:getFace("cfont", font_size),
                 width = math.min(
                     content_width,
@@ -308,6 +320,8 @@ function TextPopup:init()
 end
 
 function TextPopup:onHoldStartText(arg, gesture)
+    self._selection_start_position = copyPosition(gesture.pos)
+    self._selection_end_position = copyPosition(gesture.pos)
     if self.vertical_popup then
         self.active_text_widget = self:_textWidgetAt(gesture.pos)
         if not self.active_text_widget and #self.text_widgets == 1 then
@@ -322,6 +336,7 @@ function TextPopup:onHoldStartText(arg, gesture)
 end
 
 function TextPopup:onHoldPanText(arg, gesture)
+    self._selection_end_position = copyPosition(gesture.pos)
     local text_widget = self.vertical_popup
         and self.active_text_widget
         or self.text_widget
@@ -332,15 +347,18 @@ function TextPopup:onHoldPanText(arg, gesture)
 end
 
 function TextPopup:onHoldReleaseText(_, gesture)
+    self._selection_end_position = copyPosition(gesture.pos)
     local text_widget = self.vertical_popup
         and self.active_text_widget
         or self.text_widget
     if not text_widget then
         return false
     end
+    local vertical_text = self:_verticalSelectionText(text_widget)
     local handled = text_widget.text_widget:onHoldReleaseText(function(text, hold_duration)
-        if self.on_selection and text and text ~= "" then
-            self.on_selection(text, hold_duration, function()
+        local selected_text = vertical_text or text
+        if self.on_selection and selected_text and selected_text ~= "" then
+            self.on_selection(selected_text, hold_duration, function()
                 if text_widget and text_widget.text_widget then
                     text_widget.text_widget:scheduleClearHighlightAndRedraw()
                 end
@@ -348,7 +366,45 @@ function TextPopup:onHoldReleaseText(_, gesture)
         end
     end, gesture)
     self.active_text_widget = nil
+    self._selection_start_position = nil
+    self._selection_end_position = nil
     return handled
+end
+
+function TextPopup:_verticalSelectionText(text_widget)
+    if not self.vertical_grid
+            or not self._selection_start_position
+            or not self._selection_end_position
+            or not text_widget
+            or not text_widget.text_widget
+            or not text_widget.text_widget.dimen then
+        return nil
+    end
+
+    local widget = text_widget.text_widget
+    local dimen = widget.dimen
+    local function cellAt(position)
+        local raw_index = widget:getCharPosAtXY(
+            position.x - dimen.x,
+            position.y - dimen.y
+        )
+        return self.vertical_grid.index_to_cell[raw_index]
+    end
+
+    local start_cell = cellAt(self._selection_start_position)
+    local end_cell = cellAt(self._selection_end_position)
+    if not start_cell or not end_cell
+            or start_cell.column ~= end_cell.column then
+        return nil
+    end
+
+    local column = self.vertical_grid.columns[start_cell.column]
+    local first_row = math.min(start_cell.row, end_cell.row)
+    local last_row = math.max(start_cell.row, end_cell.row)
+    if not column or first_row < 1 or last_row > #column then
+        return nil
+    end
+    return table.concat(column, "", first_row, last_row)
 end
 
 function TextPopup:_textWidgetAt(position)

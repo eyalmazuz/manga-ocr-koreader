@@ -573,6 +573,9 @@ function Mokuro.cleanupSelection(text)
         return ""
     end
     local cleaned = util.cleanupSelectedText(text)
+    -- Vertical-region popups use full-width spaces to keep columns aligned.
+    -- They are layout cells, not part of the dictionary query.
+    cleaned = cleaned:gsub("\227\128\128", "")
     -- TextBoxWidget may insert visual spaces between CJK glyphs. Check actual
     -- Unicode ranges so spaces between non-CJK three-byte characters survive.
     cleaned = cleaned:gsub("()(%s+)()", function(before, whitespace, after)
