@@ -196,10 +196,9 @@ async fn scan_inner(
 
 fn scan_force_scope(force: bool, reset: bool, page: Option<usize>) -> ForceScope {
     match (reset, force, page) {
-        (true, _, _) => ForceScope::WholeVolume,
         (false, false, _) => ForceScope::None,
         (false, true, Some(page)) => ForceScope::Page(page - 1),
-        (false, true, None) => ForceScope::WholeVolume,
+        (true, _, _) | (false, true, None) => ForceScope::WholeVolume,
     }
 }
 
