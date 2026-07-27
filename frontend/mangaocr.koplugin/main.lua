@@ -111,6 +111,7 @@ end
 
 function MangaOCR:_initReader()
     self.hotspots_enabled = G_reader_settings:nilOrTrue("mangaocr_hotspots_enabled")
+    self.region_popup_enabled = G_reader_settings:nilOrTrue("mangaocr_region_popup_enabled")
     self.show_outlines = G_reader_settings:isTrue("mangaocr_show_outlines")
     self.hide_furigana = G_reader_settings:nilOrTrue("mangaocr_hide_furigana")
     self.overlay = Overlay:new{
@@ -251,10 +252,10 @@ function MangaOCR:onMangaOCRTap(gesture)
     if not hit then
         return false
     end
-    return self:_showTextBlock(hit.block)
+    return self:_showTextBlock(hit.block, hit.rect)
 end
 
-function MangaOCR:_showTextBlock(block)
+function MangaOCR:_showTextBlock(block, anchor)
     local block_text = Mokuro.getBlockText(block)
     if block_text == "" then
         return false
@@ -270,6 +271,10 @@ function MangaOCR:_showTextBlock(block)
     local popup
     popup = TextPopup:new{
         text = block_text,
+        lines = block.lines,
+        vertical = block.vertical == true,
+        region_mode = self.region_popup_enabled,
+        anchor = anchor,
         on_selection = function(selected_text, hold_duration, clear_callback)
             self:_lookupSelection(selected_text, hold_duration, clear_callback)
         end,
@@ -1053,6 +1058,19 @@ function MangaOCR:addToMainMenu(menu_items)
                 callback = function()
                     self.hotspots_enabled = not self.hotspots_enabled
                     self:_setBooleanSetting("mangaocr_hotspots_enabled", self.hotspots_enabled)
+                end,
+            },
+            {
+                text = _("Show enlarged OCR text near the tapped region"),
+                checked_func = function()
+                    return self.region_popup_enabled
+                end,
+                callback = function()
+                    self.region_popup_enabled = not self.region_popup_enabled
+                    self:_setBooleanSetting(
+                        "mangaocr_region_popup_enabled",
+                        self.region_popup_enabled
+                    )
                 end,
             },
             {

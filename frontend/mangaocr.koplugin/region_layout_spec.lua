@@ -1,0 +1,26 @@
+-- luacheck: globals describe it assert
+
+local Layout = require("MangaOCRRegionLayout")
+
+describe("Manga OCR region layout", function()
+    it("keeps UTF-8 characters intact in a vertical column", function()
+        assert.are.equal(
+            "  俺\nが\nい",
+            Layout.verticalColumnText("俺がい", "  ")
+        )
+    end)
+
+    it("places vertical lines from right to left", function()
+        assert.are.same(
+            { "右", "中", "左" },
+            Layout.orderedVerticalLines({ "左", "中", "右" })
+        )
+    end)
+
+    it("ignores invalid and empty lines", function()
+        assert.are.same(
+            { "甲" },
+            Layout.orderedVerticalLines({ "", false, "甲", nil })
+        )
+    end)
+end)

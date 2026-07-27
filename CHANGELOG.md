@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- An optional enlarged OCR-region popup that keeps selectable text near the
+  tapped region and lays out vertical Japanese columns right-to-left.
+
 ## [0.3.0] - 2026-07-27
 
 ### Added
