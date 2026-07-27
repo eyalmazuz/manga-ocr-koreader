@@ -16,6 +16,8 @@ All notable changes to this project are documented here. The format follows
 - Region popups now size themselves from the tapped OCR box and the amount of
   text, keeping short columns compact instead of stretching them across most
   of the screen.
+- Vertical columns are rendered in one selectable popup text box, so a
+  dictionary hold can select text across the whole OCR region.
 
 ## [0.3.0] - 2026-07-27
 

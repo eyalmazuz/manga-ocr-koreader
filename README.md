@@ -181,7 +181,7 @@ user storage.
 2. Select **Scan manga with Google Lens**.
 3. Accept the privacy notice and connect Wi-Fi when prompted.
 4. Wait for the scan to finish, then open the manga.
-5. Tap a detected text region to open an enlarged selectable view and use
+5. Tap a detected text region to open one enlarged selectable view and use
    KOReader's dictionary actions. The view follows the OCR orientation:
    horizontal text stays horizontal, while vertical Japanese columns are
    displayed top-to-bottom and right-to-left.
