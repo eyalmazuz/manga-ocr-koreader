@@ -381,18 +381,14 @@ function TextPopup:_verticalSelectionText(text_widget)
         return nil
     end
 
-    local widget = text_widget.text_widget
-    local dimen = widget.dimen
-    local function cellAt(position)
-        local raw_index = widget:getCharPosAtXY(
-            position.x - dimen.x,
-            position.y - dimen.y
-        )
-        return self.vertical_grid.index_to_cell[raw_index]
-    end
-
-    local start_cell = cellAt(self._selection_start_position)
-    local end_cell = cellAt(self._selection_end_position)
+    local start_cell = self:_verticalGridCellAt(
+        text_widget,
+        self._selection_start_position
+    )
+    local end_cell = self:_verticalGridCellAt(
+        text_widget,
+        self._selection_end_position
+    )
     if not start_cell or not end_cell
             or start_cell.column ~= end_cell.column then
         return nil
@@ -405,6 +401,50 @@ function TextPopup:_verticalSelectionText(text_widget)
         return nil
     end
     return table.concat(column, "", first_row, last_row)
+end
+
+function TextPopup:_verticalGridCellAt(text_widget, position)
+    local widget = text_widget and text_widget.text_widget
+    local dimen = widget and widget.dimen
+    if not widget or not dimen or not position then
+        return nil
+    end
+
+    local relative_x = position.x - dimen.x
+    local relative_y = position.y - dimen.y
+    local raw_index = widget:getCharPosAtXY(relative_x, relative_y)
+    local direct_cell = self.vertical_grid.index_to_cell[raw_index]
+    if direct_cell then
+        return direct_cell
+    end
+
+    -- A hold can begin on a separator cell. Inspect the shaped row to map
+    -- that point to the nearest real character in the same visual column.
+    local row = math.floor(relative_y / widget.line_height_px)
+        + (widget.virtual_line_num or 1)
+    local line = widget.vertical_string_list[row]
+    local row_cells = self.vertical_grid.cells[row]
+    if not line or not row_cells then
+        return nil
+    end
+    pcall(widget._shapeLine, widget, line)
+    local nearest
+    local nearest_distance = math.huge
+    for column, cell_index in pairs(row_cells) do
+        for _, glyph in ipairs(line.xglyphs or {}) do
+            if glyph.text_index == cell_index then
+                local center = (glyph.x0 + glyph.x1) / 2
+                local distance = math.abs(relative_x - center)
+                if relative_x >= glyph.x0 and relative_x <= glyph.x1 then
+                    return { row = row, column = column }
+                elseif distance < nearest_distance then
+                    nearest = { row = row, column = column }
+                    nearest_distance = distance
+                end
+            end
+        end
+    end
+    return nearest
 end
 
 function TextPopup:_textWidgetAt(position)
