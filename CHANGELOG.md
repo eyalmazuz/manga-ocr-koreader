@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-27
+
 ### Added
 
 - An optional enlarged OCR-region popup that keeps selectable text over the
@@ -76,6 +78,7 @@ All notable changes to this project are documented here. The format follows
   joining related columns across modest font-size differences.
 - Cross-platform worker launching and atomic status/cache replacement.
 
-[Unreleased]: https://github.com/eyalmazuz/manga-ocr-koreader/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/eyalmazuz/manga-ocr-koreader/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/eyalmazuz/manga-ocr-koreader/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/eyalmazuz/manga-ocr-koreader/compare/v0.2.3...v0.3.0
 [0.2.3]: https://github.com/eyalmazuz/manga-ocr-koreader/releases/tag/v0.2.3
