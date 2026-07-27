@@ -33,7 +33,7 @@ them, and generated OCR survives plugin upgrades.
   continue.
 - Group nearby vertical columns or horizontal rows into useful tappable text
   regions.
-- Open an enlarged selectable text view next to the tapped region, with
+- Open an enlarged selectable text view over the tapped region, with
   vertical Japanese columns laid out right-to-left.
 - Hide furigana while preserving ordinary hiragana and katakana dialogue.
 - Use KOReader's normal dictionary and Wikipedia lookup flow.
@@ -202,8 +202,8 @@ Open the **Manga OCR** entry in KOReader's reader menu. It provides:
 - **Retry failed pages** — scans only recorded failures;
 - **Reload OCR data**;
 - **Enable OCR hotspots**;
-- **Show enlarged OCR text near the tapped region** — disable this to use the
-  original bottom text panel;
+- **Show enlarged OCR text over the tapped region** — enabled by default;
+  disable it to use the original bottom text panel;
 - **Show OCR box outlines**;
 - **Hide furigana (small kana readings)**;
 - **OCR language** — Japanese or English; and

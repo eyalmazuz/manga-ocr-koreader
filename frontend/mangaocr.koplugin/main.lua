@@ -1061,7 +1061,7 @@ function MangaOCR:addToMainMenu(menu_items)
                 end,
             },
             {
-                text = _("Show enlarged OCR text near the tapped region"),
+                text = _("Show enlarged OCR text over the tapped region"),
                 checked_func = function()
                     return self.region_popup_enabled
                 end,

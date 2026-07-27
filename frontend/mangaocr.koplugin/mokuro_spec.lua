@@ -207,6 +207,7 @@ describe("Mokuro schema helpers", function()
     it("removes selection spaces only between actual CJK characters", function()
         assert.are.equal("日本", Mokuro.cleanupSelection("  日本"))
         assert.are.equal("日本", Mokuro.cleanupSelection("日 本"))
+        assert.are.equal("日本", Mokuro.cleanupSelection("日\n本"))
         assert.are.equal("ấ ộ", Mokuro.cleanupSelection("ấ ộ"))
     end)
 

@@ -3,17 +3,20 @@
 -- LICENSE.mokuroreader-koreader in release packages.
 local Blitbuffer = require("ffi/blitbuffer")
 local BottomContainer = require("ui/widget/container/bottomcontainer")
+local CenterContainer = require("ui/widget/container/centercontainer")
 local Device = require("device")
 local Font = require("ui/font")
 local FrameContainer = require("ui/widget/container/framecontainer")
 local Geom = require("ui/geometry")
 local GestureRange = require("ui/gesturerange")
+local HorizontalGroup = require("ui/widget/horizontalgroup")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local MovableContainer = require("ui/widget/container/movablecontainer")
 local RegionLayout = require("MangaOCRRegionLayout")
 local Selection = require("MangaOCRSelection")
 local ScrollTextWidget = require("ui/widget/scrolltextwidget")
 local Size = require("ui/size")
+local TextBoxWidget = require("ui/widget/textboxwidget")
 local UIManager = require("ui/uimanager")
 
 local Screen = Device.screen
@@ -26,41 +29,41 @@ local REGION_MIN_WIDTH = 120
 local REGION_MIN_HEIGHT = 100
 local DEFAULT_REGION_FONT_SIZE = 44
 local MIN_REGION_FONT_SIZE = 16
+local ABSOLUTE_MIN_REGION_FONT_SIZE = 8
 
-local function scaledRegionLimit(anchor, field, minimum, maximum, fallback)
-    local source = anchor and anchor[field]
-    if type(source) ~= "number" or source <= 0 then
-        source = fallback
-    end
+local function hasValidAnchor(anchor)
+    return type(anchor) == "table"
+        and type(anchor.x) == "number"
+        and type(anchor.y) == "number"
+        and type(anchor.w) == "number"
+        and anchor.w > 0
+        and type(anchor.h) == "number"
+        and anchor.h > 0
+end
+
+local function scaledRegionLimit(anchor, field, minimum, maximum)
     return math.min(
         maximum,
-        math.max(minimum, math.floor(source * REGION_SCALE))
+        math.max(minimum, math.floor(anchor[field] * REGION_SCALE))
     )
 end
 
 local function verticalMetrics(lines, font_size)
+    local font_pixels = Screen:scaleBySize(font_size)
     local max_characters = 1
     for _, line in ipairs(lines) do
         max_characters = math.max(max_characters, RegionLayout.utf8Length(line))
     end
 
-    -- A compact column still needs room for the leading selection padding and
-    -- one glyph. The old layout divided most of the screen between columns,
-    -- which made short regions look disconnected from the tapped source.
     local column_width = math.max(
-        math.floor(font_size * 1.75),
-        font_size + 2 * Size.padding.small
+        math.floor(font_pixels * 1.45),
+        font_pixels + 2 * Size.padding.small
     )
-    local column_gap = math.max(
-        Screen:scaleBySize(8),
-        math.floor(font_size)
-    )
-    local line_height = math.max(1, math.floor(font_size * 1.3))
+    local line_height = math.max(1, math.floor(font_pixels * 1.3))
     return {
         column_width = column_width,
-        column_gap = column_gap,
         line_height = line_height,
-        width = #lines * column_width + math.max(0, #lines - 1) * column_gap,
+        width = #lines * column_width,
         height = max_characters * line_height,
     }
 end
@@ -82,21 +85,10 @@ local TextPopup = InputContainer:extend{
     anchor = nil,
     on_selection = nil,
     close_callback = nil,
-    vertical_grid = nil,
 }
 
-local function copyPosition(position)
-    if not position then
-        return nil
-    end
-    return Geom:new{
-        x = position.x,
-        y = position.y,
-    }
-end
-
 function TextPopup:init()
-    local is_region = self.region_mode == true and self.anchor ~= nil
+    local is_region = self.region_mode == true and hasValidAnchor(self.anchor)
     local padding = Size.padding.large
     local border = Size.border.window
     local width
@@ -106,15 +98,13 @@ function TextPopup:init()
             self.anchor,
             "w",
             Screen:scaleBySize(REGION_MIN_WIDTH),
-            math.floor(Screen:getWidth() * REGION_WIDTH_RATIO),
-            math.floor(Screen:getWidth() * 0.45)
+            math.floor(Screen:getWidth() * REGION_WIDTH_RATIO)
         )
         height = scaledRegionLimit(
             self.anchor,
             "h",
             Screen:scaleBySize(REGION_MIN_HEIGHT),
-            math.floor(Screen:getHeight() * REGION_HEIGHT_RATIO),
-            math.floor(Screen:getHeight() * 0.35)
+            math.floor(Screen:getHeight() * REGION_HEIGHT_RATIO)
         )
     else
         width = Screen:getWidth()
@@ -136,21 +126,6 @@ function TextPopup:init()
     if self.vertical_popup and type(self.lines) == "table" then
         local lines = RegionLayout.orderedVerticalLines(self.lines)
         if #lines > 0 then
-            local metrics = verticalMetrics(lines, font_size)
-            -- Fit a region to a bounded enlargement of the source box. The
-            -- font is reduced only when the text would exceed that bound; the
-            -- resulting widget uses the text's natural dimensions, so short
-            -- regions do not become full-screen panels.
-            while font_size > MIN_REGION_FONT_SIZE
-                    and (metrics.width > content_width
-                        or metrics.height > content_height) do
-                font_size = font_size - 1
-                metrics = verticalMetrics(lines, font_size)
-            end
-
-            -- The source box is a sizing hint, not a clipping rectangle. If
-            -- the minimum readable font still needs more room, let the popup
-            -- grow to the natural text size so the last column is not hidden.
             local maximum_content_width = math.max(
                 1,
                 math.floor(Screen:getWidth() * REGION_WIDTH_RATIO)
@@ -161,45 +136,68 @@ function TextPopup:init()
                 math.floor(Screen:getHeight() * REGION_HEIGHT_RATIO)
                     - 2 * padding - 2 * border
             )
-            content_width = math.min(maximum_content_width, metrics.width)
-            content_height = math.min(maximum_content_height, metrics.height)
-            local column_width = metrics.column_width
-            self.vertical_grid = RegionLayout.verticalGrid(
-                lines,
-                SELECTION_PADDING,
-                RegionLayout.FULLWIDTH_SPACE
-            )
-            local text_widget = ScrollTextWidget:new{
-                -- Render all columns in one text widget. Newlines form the
-                -- rows while the separators preserve the visual columns;
-                -- this keeps the popup a single selectable text box.
-                text = self.vertical_grid.text,
-                face = Font:getFace("cfont", font_size),
-                width = math.min(
-                    content_width,
-                    metrics.width
-                ),
-                height = content_height,
-                scroll_bar_width = 0,
-                text_scroll_span = 0,
-                dialog = self,
-                justified = false,
-                para_direction_rtl = false,
-                auto_para_direction = false,
-                alignment = "center",
-                lang = language,
-                highlight_text_selection = true,
-            }
-            if language:match("^ja") then
-                Selection.enableExactXtextRanges(
-                    text_widget.text_widget,
-                    FIRST_TEXT_INDEX
-                )
+            local metrics = verticalMetrics(lines, font_size)
+            while font_size > MIN_REGION_FONT_SIZE
+                    and (metrics.width > content_width
+                        or metrics.height > content_height) do
+                font_size = font_size - 1
+                metrics = verticalMetrics(lines, font_size)
             end
-            self.text_widgets[1] = text_widget
-            self.text_widget = text_widget
-            self.content_widget = text_widget
-            self.vertical_popup = true
+
+            -- Very long regions may still exceed the screen at the normal
+            -- minimum. Keep shrinking in that unusual case instead of
+            -- clipping an entire column or the end of the text.
+            while font_size > ABSOLUTE_MIN_REGION_FONT_SIZE
+                    and (metrics.width > maximum_content_width
+                        or metrics.height > maximum_content_height) do
+                font_size = font_size - 1
+                metrics = verticalMetrics(lines, font_size)
+            end
+
+            local columns = HorizontalGroup:new{
+                align = "top",
+                allow_mirroring = false,
+            }
+            local face = Font:getFace("cfont", font_size)
+            for _, line in ipairs(lines) do
+                local text_widget = TextBoxWidget:new{
+                    -- Each OCR line is its own selectable top-to-bottom
+                    -- column. The surrounding frame remains one popup.
+                    text = RegionLayout.verticalColumnText(line),
+                    face = face,
+                    width = metrics.column_width,
+                    dialog = self,
+                    justified = false,
+                    para_direction_rtl = false,
+                    auto_para_direction = false,
+                    alignment = "center",
+                    alignment_strict = true,
+                    lang = language,
+                    highlight_text_selection = true,
+                }
+                if language:match("^ja") then
+                    Selection.enableExactXtextRanges(text_widget, 1)
+                end
+                self.text_widgets[#self.text_widgets + 1] = text_widget
+                columns[#columns + 1] = text_widget
+            end
+
+            local column_size = columns:getSize()
+            content_width = math.min(
+                maximum_content_width,
+                math.max(content_width, column_size.w)
+            )
+            content_height = math.min(
+                maximum_content_height,
+                math.max(content_height, column_size.h)
+            )
+            self.content_widget = CenterContainer:new{
+                dimen = Geom:new{
+                    w = content_width,
+                    h = content_height,
+                },
+                columns,
+            }
         end
         -- Empty or malformed line data should still leave a usable popup.
         if #self.text_widgets == 0 then
@@ -225,7 +223,7 @@ function TextPopup:init()
             lang = language,
             highlight_text_selection = true,
         }
-        self.text_widgets[1] = self.text_widget
+        self.text_widgets[1] = self.text_widget.text_widget
         if language:match("^ja") then
             Selection.enableExactXtextRanges(
                 self.text_widget.text_widget,
@@ -244,10 +242,12 @@ function TextPopup:init()
     }
     if is_region then
         local popup_size = self.frame:getSize()
-        local popup_x = self.anchor.x
+        local popup_x = math.floor(self.anchor.x
             + (self.anchor.w - popup_size.w) / 2
-        local popup_y = self.anchor.y
+        )
+        local popup_y = math.floor(self.anchor.y
             + (self.anchor.h - popup_size.h) / 2
+        )
         popup_x = math.max(
             0,
             math.min(Screen:getWidth() - popup_size.w, popup_x)
@@ -308,6 +308,18 @@ function TextPopup:init()
                     ges = "hold_release",
                     range = screen_range,
                 },
+                -- Supplying the callback as event args lets KOReader route the
+                -- release to whichever text widget consumed the hold. This is
+                -- important when a vertical popup contains several columns.
+                args = function(text, hold_duration)
+                    if self.on_selection and text and text ~= "" then
+                        self.on_selection(text, hold_duration, function()
+                            for _, text_widget in ipairs(self.text_widgets) do
+                                text_widget:scheduleClearHighlightAndRedraw()
+                            end
+                        end)
+                    end
+                end,
             },
         }
     end
@@ -317,149 +329,6 @@ function TextPopup:init()
             Close = { { Device.input.group.Back } },
         }
     end
-end
-
-function TextPopup:onHoldStartText(arg, gesture)
-    self._selection_start_position = copyPosition(gesture.pos)
-    self._selection_end_position = copyPosition(gesture.pos)
-    if self.vertical_popup then
-        self.active_text_widget = self:_textWidgetAt(gesture.pos)
-        if not self.active_text_widget and #self.text_widgets == 1 then
-            self.active_text_widget = self.text_widgets[1]
-        end
-        if not self.active_text_widget then
-            return false
-        end
-        return self.active_text_widget.text_widget:onHoldStartText(arg, gesture)
-    end
-    return self.text_widget.text_widget:onHoldStartText(arg, gesture)
-end
-
-function TextPopup:onHoldPanText(arg, gesture)
-    self._selection_end_position = copyPosition(gesture.pos)
-    local text_widget = self.vertical_popup
-        and self.active_text_widget
-        or self.text_widget
-    if not text_widget then
-        return false
-    end
-    return text_widget.text_widget:onHoldPanText(arg, gesture)
-end
-
-function TextPopup:onHoldReleaseText(_, gesture)
-    self._selection_end_position = copyPosition(gesture.pos)
-    local text_widget = self.vertical_popup
-        and self.active_text_widget
-        or self.text_widget
-    if not text_widget then
-        return false
-    end
-    local vertical_text = self:_verticalSelectionText(text_widget)
-    local handled = text_widget.text_widget:onHoldReleaseText(function(text, hold_duration)
-        local selected_text = vertical_text or text
-        if self.on_selection and selected_text and selected_text ~= "" then
-            self.on_selection(selected_text, hold_duration, function()
-                if text_widget and text_widget.text_widget then
-                    text_widget.text_widget:scheduleClearHighlightAndRedraw()
-                end
-            end)
-        end
-    end, gesture)
-    self.active_text_widget = nil
-    self._selection_start_position = nil
-    self._selection_end_position = nil
-    return handled
-end
-
-function TextPopup:_verticalSelectionText(text_widget)
-    if not self.vertical_grid
-            or not self._selection_start_position
-            or not self._selection_end_position
-            or not text_widget
-            or not text_widget.text_widget
-            or not text_widget.text_widget.dimen then
-        return nil
-    end
-
-    local start_cell = self:_verticalGridCellAt(
-        text_widget,
-        self._selection_start_position
-    )
-    local end_cell = self:_verticalGridCellAt(
-        text_widget,
-        self._selection_end_position
-    )
-    if not start_cell or not end_cell
-            or start_cell.column ~= end_cell.column then
-        return nil
-    end
-
-    local column = self.vertical_grid.columns[start_cell.column]
-    local first_row = math.min(start_cell.row, end_cell.row)
-    local last_row = math.max(start_cell.row, end_cell.row)
-    if not column or first_row < 1 or last_row > #column then
-        return nil
-    end
-    return table.concat(column, "", first_row, last_row)
-end
-
-function TextPopup:_verticalGridCellAt(text_widget, position)
-    local widget = text_widget and text_widget.text_widget
-    local dimen = widget and widget.dimen
-    if not widget or not dimen or not position then
-        return nil
-    end
-
-    local relative_x = position.x - dimen.x
-    local relative_y = position.y - dimen.y
-    local raw_index = widget:getCharPosAtXY(relative_x, relative_y)
-    local direct_cell = self.vertical_grid.index_to_cell[raw_index]
-    if direct_cell then
-        return direct_cell
-    end
-
-    -- A hold can begin on a separator cell. Inspect the shaped row to map
-    -- that point to the nearest real character in the same visual column.
-    local row = math.floor(relative_y / widget.line_height_px)
-        + (widget.virtual_line_num or 1)
-    local line = widget.vertical_string_list[row]
-    local row_cells = self.vertical_grid.cells[row]
-    if not line or not row_cells then
-        return nil
-    end
-    pcall(widget._shapeLine, widget, line)
-    local nearest
-    local nearest_distance = math.huge
-    for column, cell_index in pairs(row_cells) do
-        for _, glyph in ipairs(line.xglyphs or {}) do
-            if glyph.text_index == cell_index then
-                local center = (glyph.x0 + glyph.x1) / 2
-                local distance = math.abs(relative_x - center)
-                if relative_x >= glyph.x0 and relative_x <= glyph.x1 then
-                    return { row = row, column = column }
-                elseif distance < nearest_distance then
-                    nearest = { row = row, column = column }
-                    nearest_distance = distance
-                end
-            end
-        end
-    end
-    return nearest
-end
-
-function TextPopup:_textWidgetAt(position)
-    if not position then
-        return nil
-    end
-    for _, text_widget in ipairs(self.text_widgets or {}) do
-        local widget = text_widget.text_widget
-        local dimen = widget and widget.dimen
-        if dimen and position.x >= dimen.x and position.x < dimen.x + dimen.w
-                and position.y >= dimen.y and position.y < dimen.y + dimen.h then
-            return text_widget
-        end
-    end
-    return nil
 end
 
 function TextPopup:onTapClose(_, gesture)

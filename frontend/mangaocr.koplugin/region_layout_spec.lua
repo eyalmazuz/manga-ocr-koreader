@@ -10,27 +10,13 @@ describe("Manga OCR region layout", function()
 
     it("keeps UTF-8 characters intact in a vertical column", function()
         assert.are.equal(
-            "  俺\nが\nい",
-            Layout.verticalColumnText("俺がい", "  ")
+            "俺\nが\nい",
+            Layout.verticalColumnText("俺がい")
         )
     end)
 
-    it("keeps multiple vertical columns in one selectable grid", function()
-        local fullwidth_space = Layout.FULLWIDTH_SPACE
-        assert.are.equal(
-            "  あ" .. fullwidth_space .. "何\n"
-                .. "  い" .. fullwidth_space .. "や\n"
-                .. "  つ" .. fullwidth_space .. "っ",
-            Layout.verticalGridText({ "あいつ", "何やっ" }, "  ")
-        )
-    end)
-
-    it("records the character position of each vertical grid cell", function()
-        local grid = Layout.verticalGrid({ "あい", "何" }, "  ")
-        assert.are.equal(3, grid.cells[1][1])
-        assert.are.equal(5, grid.cells[1][2])
-        assert.are.equal(9, grid.cells[2][1])
-        assert.are.same({ row = 2, column = 1 }, grid.index_to_cell[9])
+    it("returns an empty column for invalid input", function()
+        assert.are.equal("", Layout.verticalColumnText(false))
     end)
 
     it("places vertical lines from right to left", function()

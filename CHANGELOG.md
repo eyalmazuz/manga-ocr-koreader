@@ -8,7 +8,7 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
-- An optional enlarged OCR-region popup that keeps selectable text near the
+- An optional enlarged OCR-region popup that keeps selectable text over the
   tapped region and lays out vertical Japanese columns right-to-left.
 
 ### Changed
@@ -16,8 +16,8 @@ All notable changes to this project are documented here. The format follows
 - Region popups now size themselves from the tapped OCR box and the amount of
   text, keeping short columns compact instead of stretching them across most
   of the screen.
-- Vertical columns are rendered in one selectable popup text box, so a
-  dictionary hold can select text across the whole OCR region.
+- Vertical columns use KOReader's native top-to-bottom text selection inside
+  one popup frame, with dictionary lookup routed from the selected column.
 
 ## [0.3.0] - 2026-07-27
 
