@@ -254,11 +254,28 @@ function TextPopup:init()
         self.content_widget,
     }
     if is_region then
-        self[1] = MovableContainer:new{
-            anchor = self.anchor,
+        local popup_size = self.frame:getSize()
+        local popup_x = self.anchor.x
+            + (self.anchor.w - popup_size.w) / 2
+        local popup_y = self.anchor.y
+            + (self.anchor.h - popup_size.h) / 2
+        popup_x = math.max(
+            0,
+            math.min(Screen:getWidth() - popup_size.w, popup_x)
+        )
+        popup_y = math.max(
+            0,
+            math.min(Screen:getHeight() - popup_size.h, popup_y)
+        )
+        local centered_popup = MovableContainer:new{
             unmovable = true,
             self.frame,
         }
+        centered_popup:setMovedOffset(Geom:new{
+            x = popup_x,
+            y = popup_y,
+        })
+        self[1] = centered_popup
     else
         self[1] = BottomContainer:new{
             dimen = Screen:getSize(),
