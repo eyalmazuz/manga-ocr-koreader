@@ -73,7 +73,7 @@ local function readFontSize(setting, default)
     return math.floor(value)
 end
 
-local TextPopup = InputContainer:extend{
+    local TextPopup = InputContainer:extend{
     modal = false,
     text = "",
     lines = nil,
@@ -185,6 +185,7 @@ function TextPopup:init()
                 )
             end
             self.text_widgets[1] = text_widget
+            self.text_widget = text_widget
             self.content_widget = text_widget
             self.vertical_popup = true
         end
@@ -309,6 +310,9 @@ end
 function TextPopup:onHoldStartText(arg, gesture)
     if self.vertical_popup then
         self.active_text_widget = self:_textWidgetAt(gesture.pos)
+        if not self.active_text_widget and #self.text_widgets == 1 then
+            self.active_text_widget = self.text_widgets[1]
+        end
         if not self.active_text_widget then
             return false
         end
