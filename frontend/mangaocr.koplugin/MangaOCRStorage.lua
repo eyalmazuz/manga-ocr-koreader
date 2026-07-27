@@ -10,6 +10,35 @@ Storage.__index = Storage
 local ZIP_EOCD = "PK\005\006"
 local ZIP_MAX_COMMENT = 65535
 
+local ARCHIVE_EXTENSIONS = {
+    cbz = true,
+    zip = true,
+}
+
+local DIRECT_IMAGE_EXTENSIONS = {
+    bmp = true,
+    jpeg = true,
+    jpg = true,
+    pam = true,
+    pbm = true,
+    pgm = true,
+    png = true,
+    pnm = true,
+    ppm = true,
+}
+
+local function pathArgument(path_or_storage, path)
+    return path or path_or_storage
+end
+
+local function extension(path)
+    if type(path) ~= "string" then
+        return nil
+    end
+    local suffix = path:match("%.([^./\\]+)$")
+    return suffix and suffix:lower() or nil
+end
+
 local function readFile(path)
     local file = io.open(path, "rb")
     if not file then
@@ -39,13 +68,33 @@ function Storage:new(options)
     }, self)
 end
 
+-- These classifiers accept either dot or colon calls so callers can use the
+-- module directly or a Storage instance.
+function Storage.isArchive(path_or_storage, path)
+    return ARCHIVE_EXTENSIONS[extension(pathArgument(path_or_storage, path))] == true
+end
+
+function Storage.isDirectImage(path_or_storage, path)
+    return DIRECT_IMAGE_EXTENSIONS[extension(pathArgument(path_or_storage, path))] == true
+end
+
+function Storage.isDirect(path_or_storage, path)
+    path = pathArgument(path_or_storage, path)
+    return Storage.isArchive(path) or Storage.isDirectImage(path)
+end
+
 function Storage:isSupported(path)
-    if type(path) ~= "string" then
-        return false
+    if Storage.isDirect(path) then
+        return true
     end
-    local extension = path:match("%.([^./]+)$")
-    extension = extension and extension:lower()
-    return extension == "cbz" or extension == "zip"
+
+    -- Keep the storage module independently testable and usable by older
+    -- installations that do not include the document export bridge.
+    local ok, Document = pcall(require, "MangaOCRDocument")
+    return ok
+        and type(Document) == "table"
+        and type(Document.isFixedLayoutPath) == "function"
+        and Document.isFixedLayoutPath(path) == true
 end
 
 -- Parse an EOCD record from the tail of a ZIP. This is deliberately independent
@@ -111,8 +160,11 @@ function Storage.parseRakuyomiOriginComment(comment)
     }
 end
 
-function Storage.getRakuyomiOrigin(path)
-    local comment = Storage.getZipComment(path)
+function Storage.getRakuyomiOrigin(path, get_zip_comment)
+    if not Storage.isArchive(path) then
+        return nil
+    end
+    local comment = (get_zip_comment or Storage.getZipComment)(path)
     return Storage.parseRakuyomiOriginComment(comment)
 end
 
@@ -157,6 +209,7 @@ function Storage:ensureDirectories()
         self.root .. "/cache",
         self.root .. "/status",
         self.root .. "/logs",
+        self.root .. "/staging",
     }
     for _, directory in ipairs(directories) do
         local ok, err = util.makePath(directory)
@@ -169,12 +222,16 @@ end
 
 function Storage:getPaths(path)
     local key, origin = self:keyForFile(path)
+    local staging = self.root .. "/staging"
     return {
         key = key,
         origin = origin,
         output = self.root .. "/cache/" .. key .. ".mokuro",
         status = self.root .. "/status/" .. key .. ".json",
         log = self.root .. "/logs/" .. key .. ".log",
+        staging = staging,
+        manifest = staging .. "/" .. key .. ".json",
+        page = staging .. "/" .. key .. ".png",
     }
 end
 
@@ -204,6 +261,51 @@ function Storage:hasFailures(path)
         and #metadata.failed_pages > 0
 end
 
+function Storage:getFailedPageIndices(path)
+    local paths = self:getPaths(path)
+    local seen = {}
+    local indices = {}
+
+    local function collect(failures)
+        if type(failures) ~= "table" then
+            return
+        end
+        for _, failure in ipairs(failures) do
+            local index = type(failure) == "table" and failure.index or failure
+            index = tonumber(index)
+            if index and index >= 1 and index == math.floor(index) and not seen[index] then
+                seen[index] = true
+                indices[#indices + 1] = index
+            end
+        end
+    end
+
+    local status = self:readStatus(paths.status)
+    collect(status and status.failures)
+
+    local output = decodeJSON(readFile(paths.output) or "")
+    local metadata = output and output.mangaocr
+    collect(metadata and metadata.failed_pages)
+
+    table.sort(indices)
+    return indices
+end
+
+function Storage:getCompletedPageIndices(path)
+    local output = decodeJSON(readFile(self:getPaths(path).output) or "")
+    local pages = output and output.pages
+    local indices = {}
+    if type(pages) == "table" then
+        for index = 1, #pages do
+            if type(pages[index]) == "table"
+                    and type(pages[index].img_path) == "string" then
+                indices[#indices + 1] = index
+            end
+        end
+    end
+    return indices
+end
+
 function Storage:readStatus(path)
     local content = readFile(path)
     if not content then
@@ -219,7 +321,13 @@ end
 function Storage:deleteCache(path)
     local paths = self:getPaths(path)
     local removed = false
-    for _, candidate in ipairs({ paths.output, paths.status, paths.log }) do
+    for _, candidate in ipairs({
+        paths.output,
+        paths.status,
+        paths.log,
+        paths.manifest,
+        paths.page,
+    }) do
         if isFile(candidate) then
             local ok = os.remove(candidate)
             removed = ok and true or removed
@@ -229,6 +337,10 @@ function Storage:deleteCache(path)
 end
 
 function Storage:readEmbedded(path)
+    if not Storage.isArchive(path) then
+        return nil
+    end
+
     local Archiver = require("ffi/archiver")
     local reader = Archiver.Reader:new()
     local open_ok, opened = pcall(reader.open, reader, path)
@@ -280,13 +392,15 @@ function Storage:getCandidates(path)
         }
     end
 
-    local embedded, entry = self:readEmbedded(path)
-    if embedded then
-        candidates[#candidates + 1] = {
-            kind = "embedded",
-            path = entry,
-            content = embedded,
-        }
+    if Storage.isArchive(path) then
+        local embedded, entry = self:readEmbedded(path)
+        if embedded then
+            candidates[#candidates + 1] = {
+                kind = "embedded",
+                path = entry,
+                content = embedded,
+            }
+        end
     end
     return candidates
 end

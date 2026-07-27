@@ -1,4 +1,5 @@
 local ConfirmBox = require("ui/widget/confirmbox")
+local DocumentSource = require("MangaOCRDocument")
 local Event = require("ui/event")
 local InfoMessage = require("ui/widget/infomessage")
 local Mokuro = require("MangaOCRMokuro")
@@ -11,9 +12,13 @@ local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local Worker = require("MangaOCRWorker")
 local logger = require("logger")
+local rapidjson = require("rapidjson")
 local time = require("ui/time")
+local util = require("util")
 local _ = require("gettext")
 local T = require("ffi/util").template
+
+local active_rendered_scans = {}
 
 local MangaOCR = WidgetContainer:extend{
     name = "mangaocr",
@@ -23,6 +28,7 @@ local MangaOCR = WidgetContainer:extend{
 function MangaOCR:init()
     self.storage = Storage:new()
     self.scan_progress = {}
+    self.rendered_scan_jobs = active_rendered_scans
 
     if self.ui.name == "ReaderUI" then
         self:_initReader()
@@ -334,7 +340,10 @@ end
 
 function MangaOCR:_requestScan(path, force, page, retry_failed)
     if not self.storage:isSupported(path) then
-        self:_showMessage(_("Manga OCR can scan only CBZ or ZIP files."))
+        self:_showMessage(_(
+            "Manga OCR can scan supported image archives, raster images, "
+            .. "and fixed-layout KOReader documents."
+        ))
         return
     end
 
@@ -354,11 +363,19 @@ function MangaOCR:_startScan(path, force, page, retry_failed)
     end
 
     local paths = self.storage:getPaths(path)
-    if Worker.isRunning(paths.output) then
+    if Worker.isRunning(paths.output) or self.rendered_scan_jobs[paths.output] then
         self:_attachToRunningScan(path)
         self:_showMessage(_("An OCR scan for this manga is already running."), 3)
         return
     end
+    if not self.storage:isDirect(path) then
+        self:_startRenderedScan(path, paths, force, page, retry_failed)
+        return
+    end
+    self:_startDirectScan(path, paths, force, page, retry_failed)
+end
+
+function MangaOCR:_startDirectScan(path, paths, force, page, retry_failed)
     local listener = self:_makeWorkerListener(path, paths)
     local job, worker_error, already_running = Worker.start({
         input = path,
@@ -396,6 +413,380 @@ function MangaOCR:_startScan(path, force, page, retry_failed)
     end
 end
 
+function MangaOCR:_renderedPageList(page_count, page, retry_failed, path)
+    if page then
+        if page < 1 or page > page_count then
+            return nil, T(
+                _("Page %1 is outside this document's 1–%2 page range."),
+                page,
+                page_count
+            )
+        end
+        return { page }
+    end
+
+    if retry_failed then
+        local pages = {}
+        for _, failed_page in ipairs(self.storage:getFailedPageIndices(path)) do
+            if failed_page <= page_count then
+                pages[#pages + 1] = failed_page
+            end
+        end
+        if #pages == 0 then
+            return nil, _("There are no failed pages to retry.")
+        end
+        return pages
+    end
+
+    local pages = {}
+    for page_index = 1, page_count do
+        pages[#pages + 1] = page_index
+    end
+    return pages
+end
+
+function MangaOCR:_removeRenderedStaging(paths)
+    os.remove(paths.page)
+    os.remove(paths.manifest)
+end
+
+function MangaOCR:_forEachRenderedObserver(job, callback)
+    for observer in pairs(job.observers or {}) do
+        local ok, observer_error = xpcall(function()
+            callback(observer)
+        end, debug.traceback)
+        if not ok then
+            logger.warn(
+                "Manga OCR: rendered scan observer failed:",
+                observer_error
+            )
+        end
+    end
+end
+
+function MangaOCR:_notifyRenderedStatus(job, status)
+    self:_forEachRenderedObserver(job, function(observer)
+        observer:_onScanStatus(job.path, job.paths, status)
+    end)
+end
+
+function MangaOCR:_runRenderedSafely(job, callback)
+    local ok, callback_error = xpcall(callback, debug.traceback)
+    if ok then
+        return
+    end
+    logger.err("Manga OCR: rendered scan failed:", callback_error)
+    self:_finishRenderedScan(job, tostring(callback_error))
+end
+
+function MangaOCR:_scheduleRenderedStep(job)
+    UIManager:nextTick(function()
+        self:_runRenderedSafely(job, function()
+            self:_runNextRenderedPage(job)
+        end)
+    end)
+end
+
+function MangaOCR:_startRenderedScan(path, paths, force, page, retry_failed)
+    -- Acquire a separate registry reference so rendering can finish even if
+    -- the reader closes while a background scan is active.
+    local session, session_error = DocumentSource.open(path)
+    if not session then
+        self:_showMessage(T(
+            _("Could not prepare this document for OCR: %1"),
+            session_error
+        ))
+        return
+    end
+
+    local page_count, page_count_error = session:getPageCount()
+    if not page_count then
+        session:close()
+        self:_showMessage(T(
+            _("Could not determine the document page count: %1"),
+            page_count_error
+        ))
+        return
+    end
+    local pages, pages_error = self:_renderedPageList(
+        page_count,
+        page,
+        retry_failed,
+        path
+    )
+    if not pages then
+        session:close()
+        self:_showMessage(pages_error)
+        return
+    end
+
+    self:_removeRenderedStaging(paths)
+    local rendered_job = {
+        path = path,
+        paths = paths,
+        session = session,
+        pages = pages,
+        position = 1,
+        succeeded = 0,
+        failed = 0,
+        completed = 0,
+        consecutive_service_failures = 0,
+        force_page = force and page ~= nil,
+        reset_before_first = force and page == nil,
+        skip_completed = not force and page == nil and not retry_failed,
+        language = G_reader_settings:readSetting("mangaocr_language", "ja"),
+        observers = setmetatable({ [self] = true }, { __mode = "k" }),
+    }
+    self.rendered_scan_jobs[paths.output] = rendered_job
+    UIManager:preventStandby()
+    rendered_job.standby_prevented = true
+    self.scan_progress[paths.output] = {
+        paths = paths,
+        input = path,
+    }
+    self:_notifyRenderedStatus(rendered_job, {
+        current = 0,
+        total = #pages,
+        succeeded = 0,
+        failed = 0,
+    })
+    self:_showMessage(
+        page and _("Preparing the current page for OCR.")
+            or _("Preparing document pages for OCR in the background."),
+        3
+    )
+    self:_scheduleRenderedStep(rendered_job)
+end
+
+function MangaOCR:_writeRenderedManifest(job, page_index)
+    local manifest, manifest_error = job.session:buildManifest({
+        {
+            index = page_index,
+            path = job.paths.page,
+        },
+    })
+    if not manifest then
+        return nil, manifest_error
+    end
+
+    local encode_ok, content = pcall(rapidjson.encode, manifest)
+    if not encode_ok or type(content) ~= "string" then
+        return nil, "Could not encode the rendered-page manifest"
+    end
+    local write_ok, write_error = util.writeToFile(
+        content,
+        job.paths.manifest,
+        true,
+        false,
+        true
+    )
+    if not write_ok then
+        return nil, write_error or "Could not write the rendered-page manifest"
+    end
+    return true
+end
+
+function MangaOCR:_runNextRenderedPage(job)
+    if self.rendered_scan_jobs[job.paths.output] ~= job then
+        return
+    end
+    if job.position > #job.pages then
+        self:_finishRenderedScan(job, nil)
+        return
+    end
+
+    local page_index = job.pages[job.position]
+    if job.completed_pages and job.completed_pages[page_index] then
+        job.succeeded = job.succeeded + 1
+        job.completed = job.completed + 1
+        job.position = job.position + 1
+        self:_notifyRenderedStatus(job, {
+            current = job.completed,
+            total = #job.pages,
+            succeeded = job.succeeded,
+            failed = job.failed,
+        })
+        self:_scheduleRenderedStep(job)
+        return
+    end
+
+    self:_removeRenderedStaging(job.paths)
+    local rendered, render_error = job.session:renderPage(
+        page_index,
+        job.paths.page
+    )
+    if not rendered then
+        -- Let the worker record this page as a local failure so its ordinal is
+        -- retained and the remaining pages can continue.
+        logger.warn(
+            "Manga OCR: fixed-layout page rendering failed:",
+            page_index,
+            render_error
+        )
+        local placeholder_ok, placeholder_error = util.writeToFile(
+            "",
+            job.paths.page,
+            true
+        )
+        if not placeholder_ok then
+            self:_finishRenderedScan(
+                job,
+                placeholder_error or render_error
+            )
+            return
+        end
+    end
+
+    local manifest_ok, manifest_error = self:_writeRenderedManifest(
+        job,
+        page_index
+    )
+    if not manifest_ok then
+        self:_finishRenderedScan(job, manifest_error)
+        return
+    end
+
+    local worker, worker_error = Worker.start({
+        input = job.path,
+        output = job.paths.output,
+        status = job.paths.status,
+        log = job.paths.log,
+        language = job.language,
+        force = job.force_page,
+        reset = job.reset_before_first and job.position == 1,
+        page = page_index,
+        rendered_pages = job.paths.manifest,
+    }, {
+        on_complete = function(success, status, completion_error)
+            self:_runRenderedSafely(job, function()
+                self:_onRenderedPageComplete(
+                    job,
+                    success,
+                    status,
+                    completion_error
+                )
+            end)
+        end,
+    })
+    if not worker then
+        self:_finishRenderedScan(job, worker_error)
+    end
+end
+
+function MangaOCR:_onRenderedPageComplete(job, success, status, worker_error)
+    if self.rendered_scan_jobs[job.paths.output] ~= job then
+        return
+    end
+    self:_removeRenderedStaging(job.paths)
+
+    if not success then
+        local status_error = status
+            and type(status.error) == "string"
+            and status.error
+            or worker_error
+        self:_finishRenderedScan(
+            job,
+            status_error or _("Unknown worker error")
+        )
+        return
+    end
+
+    local failed = status and tonumber(status.failed) or 0
+    if failed > 0 then
+        job.failed = job.failed + 1
+        local failure = type(status.failures) == "table"
+            and status.failures[1]
+            or nil
+        if failure and failure.service_failure == true then
+            job.consecutive_service_failures =
+                job.consecutive_service_failures + 1
+        else
+            job.consecutive_service_failures = 0
+        end
+    else
+        job.succeeded = job.succeeded + 1
+        job.consecutive_service_failures = 0
+    end
+    job.completed = job.completed + 1
+    if job.skip_completed and not job.completed_pages then
+        job.completed_pages = {}
+        for _, page_index in ipairs(
+            self.storage:getCompletedPageIndices(job.path)
+        ) do
+            job.completed_pages[page_index] = true
+        end
+    end
+    self:_notifyRenderedStatus(job, {
+        current = job.completed,
+        total = #job.pages,
+        succeeded = job.succeeded,
+        failed = job.failed,
+    })
+
+    if job.consecutive_service_failures >= 3 then
+        self:_finishRenderedScan(
+            job,
+            _("OCR paused after repeated service or network failures.")
+        )
+        return
+    end
+
+    job.position = job.position + 1
+    self:_scheduleRenderedStep(job)
+end
+
+function MangaOCR:_finishRenderedScan(job, stop_error)
+    if self.rendered_scan_jobs[job.paths.output] ~= job then
+        return
+    end
+    self.rendered_scan_jobs[job.paths.output] = nil
+    self:_removeRenderedStaging(job.paths)
+    pcall(job.session.close, job.session)
+    if job.standby_prevented then
+        job.standby_prevented = false
+        UIManager:allowStandby()
+    end
+
+    self:_forEachRenderedObserver(job, function(observer)
+        local progress = observer.scan_progress[job.paths.output]
+        if progress and progress.dialog then
+            progress.dialog.dismiss_callback = nil
+            progress.dialog:close()
+        end
+        observer.scan_progress[job.paths.output] = nil
+
+        if observer.ui.name == "ReaderUI"
+                and observer:_currentDocumentPath() == job.path then
+            observer:loadOCR(true)
+        end
+
+        local total = #job.pages
+        if stop_error then
+            observer:_showMessage(T(
+                _("Manga OCR stopped: %1/%2 scanned — %3 failed. Completed pages were kept.\n\n%4\n\nWorker log: %5"),
+                job.succeeded,
+                total,
+                job.failed,
+                stop_error,
+                job.paths.log
+            ))
+        elseif job.failed > 0 then
+            observer:_showMessage(T(
+                _("Manga OCR finished: %1/%2 scanned — %3 failed. Successful pages were loaded."),
+                job.succeeded,
+                total,
+                job.failed
+            ))
+        else
+            observer:_showMessage(T(
+                _("Manga OCR complete: %1 of %2 pages scanned."),
+                job.succeeded,
+                total
+            ))
+        end
+    end)
+end
+
 function MangaOCR:_makeWorkerListener(path, paths)
     return {
         on_status = function(status)
@@ -412,6 +803,20 @@ function MangaOCR:_attachToRunningScan(path)
         return
     end
     local paths = self.storage:getPaths(path)
+    local rendered_job = self.rendered_scan_jobs[paths.output]
+    if rendered_job then
+        rendered_job.observers = rendered_job.observers
+            or setmetatable({}, { __mode = "k" })
+        rendered_job.observers[self] = true
+        self:_onScanStatus(path, paths, {
+            current = rendered_job.completed,
+            total = #rendered_job.pages,
+            succeeded = rendered_job.succeeded,
+            failed = rendered_job.failed,
+        })
+        return
+    end
+
     self._attached_jobs = self._attached_jobs or {}
     local last_reloaded_count
     local attached = not self._attached_jobs[paths.output]
@@ -560,7 +965,7 @@ end
 
 function MangaOCR:_confirmDeleteCache(path)
     local paths = self.storage:getPaths(path)
-    if Worker.isRunning(paths.output) then
+    if Worker.isRunning(paths.output) or self.rendered_scan_jobs[paths.output] then
         self:_showMessage(_("The OCR cache cannot be deleted while its scan is running."))
         return
     end

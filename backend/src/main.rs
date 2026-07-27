@@ -7,7 +7,7 @@ use mangaocr_worker::{ScanOptions, run_scan};
 #[command(
     name = "mangaocr-worker",
     version,
-    about = "Create resumable Mokuro sidecars for manga CBZ/ZIP archives"
+    about = "Create resumable Mokuro sidecars for paginated manga documents"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -18,9 +18,13 @@ struct Cli {
 enum Command {
     /// OCR all image pages, or one page with --page.
     Scan {
-        /// Input CBZ/ZIP archive. It is always opened read-only.
-        #[arg(long, value_name = "CBZ")]
+        /// Original archive, raster image, or rendered document. It is opened read-only.
+        #[arg(long, value_name = "PATH")]
         input: PathBuf,
+
+        /// JSON v1 mapping of document page ordinals to rendered raster files.
+        #[arg(long, value_name = "PATH")]
+        rendered_pages: Option<PathBuf>,
 
         /// Mokuro-compatible JSON sidecar to create or resume.
         #[arg(long, value_name = "PATH")]
@@ -38,7 +42,11 @@ enum Command {
         #[arg(long)]
         force: bool,
 
-        /// OCR only this 1-based naturally sorted image-page ordinal.
+        /// Clear the whole cache before scanning --page (for chained scans).
+        #[arg(long, requires = "page", conflicts_with = "retry_failed")]
+        reset: bool,
+
+        /// OCR only this 1-based document page ordinal.
         #[arg(long, value_name = "N")]
         page: Option<usize>,
 
@@ -54,19 +62,23 @@ async fn main() -> ExitCode {
     let result = match cli.command {
         Command::Scan {
             input,
+            rendered_pages,
             output,
             status,
             language,
             force,
+            reset,
             page,
             retry_failed,
         } => {
             run_scan(ScanOptions {
                 input,
+                rendered_pages,
                 output,
                 status,
                 language,
                 force,
+                reset,
                 page,
                 retry_failed,
             })
@@ -80,5 +92,46 @@ async fn main() -> ExitCode {
             eprintln!("mangaocr-worker: {error:#}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use clap::Parser;
+
+    use super::{Cli, Command};
+
+    #[test]
+    fn parses_sparse_rendered_page_scan() {
+        let cli = Cli::try_parse_from([
+            "mangaocr-worker",
+            "scan",
+            "--input",
+            "volume.pdf",
+            "--rendered-pages",
+            "pages.json",
+            "--output",
+            "volume.mokuro",
+            "--status",
+            "volume.status.json",
+            "--page",
+            "7",
+            "--reset",
+        ])
+        .expect("parse rendered-page scan");
+
+        let Command::Scan {
+            input,
+            rendered_pages,
+            reset,
+            page,
+            ..
+        } = cli.command;
+        assert_eq!(input, PathBuf::from("volume.pdf"));
+        assert_eq!(rendered_pages, Some(PathBuf::from("pages.json")));
+        assert!(reset);
+        assert_eq!(page, Some(7));
     }
 }

@@ -6,6 +6,32 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-07-27
+
+### Added
+
+- Direct OCR support for standalone raster images alongside CBZ and ZIP
+  archives.
+- Page-by-page OCR for fixed-layout formats handled by KOReader's MuPDF,
+  Picture Document, and DjVu providers, including PDF, DjVu, CBR, CBT, and
+  XPS, plus multi-page image containers.
+
+### Changed
+
+- Fixed-layout sources are rasterized at a deterministic OCR resolution
+  through temporary per-page PNGs, leaving original files untouched and
+  retaining current-page, full-scan, rescan, resume, and retry-only behavior.
+- Rendered pages use a bounded buffer size. A resumable scan validates cache
+  compatibility on its first page, then skips pages already present.
+- OCR overlays scale rendered-page regions back into KOReader's native page
+  coordinates; reflowable CRE documents remain excluded because their page
+  geometry is not stable.
+
+### Fixed
+
+- Source-format detection now uses the final filename suffix, so files with
+  additional dots in their names remain scannable.
+
 ## [0.2.3] - 2026-07-26
 
 ### Added
@@ -37,5 +63,6 @@ All notable changes to this project are documented here. The format follows
   joining related columns across modest font-size differences.
 - Cross-platform worker launching and atomic status/cache replacement.
 
-[Unreleased]: https://github.com/eyalmazuz/manga-ocr-koreader/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/eyalmazuz/manga-ocr-koreader/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/eyalmazuz/manga-ocr-koreader/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/eyalmazuz/manga-ocr-koreader/releases/tag/v0.2.3

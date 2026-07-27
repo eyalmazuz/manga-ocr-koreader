@@ -4,8 +4,8 @@
 [![Tests](https://github.com/eyalmazuz/manga-ocr-koreader/actions/workflows/tests.yml/badge.svg)](https://github.com/eyalmazuz/manga-ocr-koreader/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Manga OCR turns text in CBZ manga into tappable, dictionary-friendly regions
-directly in [KOReader](https://github.com/koreader/koreader). It scans pages
+Manga OCR turns text in manga pages into tappable, dictionary-friendly regions
+directly in [KOReader](https://github.com/koreader/koreader). It scans files
 already on the device, so books do not need to be processed with
 [Mokuro](https://github.com/kha-white/mokuro) on another computer first.
 
@@ -13,12 +13,12 @@ The plugin consists of:
 
 - a Lua KOReader frontend for file-browser actions, reader overlays, and
   dictionary lookup;
-- a small Rust worker that reads pages from the existing CBZ and sends them to
-  Google Lens for OCR; and
+- a small Rust worker that sends direct image inputs or pages rendered by
+  KOReader to Google Lens for OCR; and
 - a Mokuro-compatible JSON cache containing text and page coordinates.
 
-The source CBZ is always opened read-only. Manga OCR does not repack or modify
-it, and generated OCR survives plugin upgrades.
+Source files are always opened read-only. Manga OCR does not repack or modify
+them, and generated OCR survives plugin upgrades.
 
 > [!IMPORTANT]
 > Scanning uploads each selected manga page to Google Lens through an
@@ -35,9 +35,9 @@ it, and generated OCR survives plugin upgrades.
   regions.
 - Hide furigana while preserving ordinary hiragana and katakana dialogue.
 - Use KOReader's normal dictionary and Wikipedia lookup flow.
-- Read generated, adjacent, or CBZ-embedded `.mokuro` data.
+- Read generated, adjacent, or archive-embedded `.mokuro` data.
 - Share a stable OCR cache with chapters downloaded through Rakuyomi.
-- Keep the original archive and Rakuyomi ZIP metadata untouched.
+- Keep original files and Rakuyomi ZIP metadata untouched.
 
 Manga OCR deliberately has no direct Anki integration. If another KOReader
 plugin adds an **Add to Anki** action to the dictionary window, it continues
@@ -46,42 +46,54 @@ to work with text opened from Manga OCR.
 ## How it works
 
 ```text
-CBZ already on the device
-        |
-        v
-Rust worker -> Google Lens OCR
-        |
-        v
+CBZ/ZIP or standalone raster image ------------------\
+                                                      +--> Rust worker
+Fixed-layout document                                 |          |
+    `-- KOReader renders one temporary page to PNG --/           v
+                                                        Google Lens OCR
+                                                                |
+                                                                v
 Nearby OCR rows/columns grouped into text regions
         |
         v
 Mokuro-compatible cache in KOReader's data directory
         |
         v
-Lua overlay -> tap a detected region -> select text -> KOReader dictionary
+Lua overlay -> native page coordinates -> selectable text -> dictionary
 ```
 
-Keeping OCR outside the archive avoids a second full copy of the manga,
-protects the archive if a scan is interrupted, and preserves Rakuyomi's ZIP
-metadata.
+Temporary rendered pages are removed after processing. Keeping OCR outside the
+source protects it if a scan is interrupted and preserves archive metadata.
 
-## Requirements and current scope
+## Requirements and supported formats
 
 - A Unix-like KOReader target capable of launching the bundled worker.
 - A matching worker package for the device's CPU and ABI.
 - Wi-Fi for new Google Lens scans. Cached OCR works offline.
-- A `.cbz` or `.zip` image archive.
 
-Japanese and English OCR presets are included. The worker can decode BMP, GIF,
-JPEG, PNG, the PNM family (PAM/PBM/PGM/PPM), TIFF, and WebP. Page numbering
-mirrors KOReader/MuPDF's archive image-extension set, so an unsupported page
-does not shift every later overlay. HDP/JXR/WDP, JPEG 2000
-(J2K/JP2/JPX), JBIG2 (JB2/JBIG2), and PKM entries keep their page slots but
-are recorded as failed because the worker has no decoder for them.
+Manga OCR accepts these sources directly:
 
-PDF, EPUB image extraction, local/offline OCR, translated text rendering, and
-direct actions inside Rakuyomi's own chapter context dialog are not currently
-implemented.
+- CBZ and ZIP image archives; and
+- standalone BMP, JPEG, PNG, and PAM/PBM/PGM/PNM/PPM images.
+
+It also supports PDF, DjVu/DJV, CBR, CBT, XPS, GIF, TIFF, WebP, and the
+fixed-layout image formats HDP, J2K/JP2, JXR, and WDP when the corresponding
+KOReader provider is available. Multi-page or animated image containers use
+this path so every page or frame keeps its KOReader ordinal. KOReader renders
+these sources one page at a time to a temporary PNG at a bounded,
+deterministic OCR resolution. This is document rasterization, not a
+screenshot: it does not depend on the current screen size, zoom, crop, or
+reader orientation. The temporary PNG is removed after the worker processes
+it, and the original document remains untouched.
+
+OCR boxes are stored in rendered-page coordinates and scaled back to
+KOReader's native page coordinates for display. Normal reflowable EPUB and
+other documents opened with KOReader's CRE provider are not supported because
+their page geometry can change with typography and layout settings.
+
+Japanese and English OCR presets are included. Local/offline OCR, translated
+text rendering, and direct actions inside Rakuyomi's own chapter context
+dialog are not currently implemented.
 
 ## Installation
 
@@ -163,7 +175,7 @@ user storage.
 
 ### Scan from KOReader's file browser
 
-1. Long-press a `.cbz` or `.zip` file.
+1. Long-press a supported archive, image, or fixed-layout document.
 2. Select **Scan manga with Google Lens**.
 3. Accept the privacy notice and connect Wi-Fi when prompted.
 4. Wait for the scan to finish, then open the manga.
@@ -172,6 +184,7 @@ user storage.
 
 If a scan already exists, the long-press menu also offers **Rescan manga**,
 **Retry failed pages**, and **Delete Manga OCR cache** when applicable.
+For a standalone image, whole-manga actions operate on its single page.
 
 ### Scan while reading
 
@@ -189,6 +202,11 @@ Open the **Manga OCR** entry in KOReader's reader menu. It provides:
 - **Hide furigana (small kana readings)**;
 - **OCR language** — Japanese or English; and
 - **Delete OCR cache**.
+
+These current-page, full-scan, rescan, and retry-only actions work the same
+way for direct inputs and KOReader-rendered fixed-layout documents. Rendered
+documents are processed one page at a time, so retrying failures does not
+rasterize or upload successful pages again.
 
 Furigana hiding is enabled by default. It hides only small hiragana or
 katakana lines whose size and position identify them as ruby beside a kanji
@@ -211,7 +229,7 @@ No Google Lens scan is required. The loader checks, in order:
 
 1. generated OCR in Manga OCR's cache;
 2. an adjacent same-stem file such as `chapter.mokuro`; and
-3. a `.mokuro` entry inside the CBZ.
+3. a `.mokuro` entry inside a CBZ or ZIP archive.
 
 The worker is not needed merely to read existing Mokuro data.
 
@@ -231,8 +249,7 @@ A pass with isolated page failures finishes normally so all usable pages load
 immediately. Three consecutive service/network page failures are treated as a
 probable outage: the job stops, all completed pages and failure records remain
 intact, and scanning can be resumed after connectivity returns. Corrupt or
-locally unsupported individual images do not trigger this service-outage
-guard.
+locally unsupported individual pages do not trigger this service-outage guard.
 
 ## Storage
 
@@ -242,12 +259,15 @@ Generated OCR, job status, and logs are kept below KOReader's data directory:
 mangaocr/
 ├── cache/
 ├── status/
-└── logs/
+├── logs/
+└── staging/
 ```
 
 The cache contains Mokuro-compatible JSON plus small extension metadata for
 the source fingerprint, OCR engine, language, and partial-scan state.
-**Delete OCR cache** removes only this generated data, never the source CBZ.
+The staging directory is used only for temporary rendered-page data, which is
+removed after processing. **Delete OCR cache** removes only generated data,
+never the source file.
 
 ## Troubleshooting
 
@@ -259,8 +279,11 @@ the source fingerprint, OCR engine, language, and partial-scan state.
   by itself.
 - Fully restart KOReader; reopening a book is not sufficient after a plugin
   upgrade.
-- The file-browser action appears only when long-pressing a `.cbz` or `.zip`
-  file. Reader actions appear only for a supported open archive.
+- File-browser and reader actions appear only for a direct input or a
+  fixed-layout document handled by KOReader's MuPDF, Picture Document, or
+  DjVu provider.
+- Reflowable EPUB and other reflowable documents are intentionally unsupported
+  because they do not have stable native page geometry.
 
 ### The worker is missing or is not executable
 
@@ -296,7 +319,7 @@ security metadata.
 
 - Verify Wi-Fi and try **Retry failed pages**.
 - Google may rate-limit or change the unofficial Lens endpoint.
-- Unsupported/corrupt image pages remain listed as individual failures.
+- Unsupported or corrupt pages remain listed as individual failures.
 - Consult the newest file below `mangaocr/logs/` and the matching JSON under
   `mangaocr/status/`.
 
@@ -310,8 +333,10 @@ regenerate an already cached page with the current grouping logic, or
 
 ### Scanning feels slow
 
-The dominant cost is image extraction/encoding, network upload, and Google
-Lens response time. Images taller than 3000 pixels are uploaded as multiple
+The dominant cost is page preparation, network upload, and Google Lens
+response time. Fixed-layout documents must first be rasterized by KOReader at
+a deterministic OCR resolution; this happens one page at a time and is not a
+screen capture. Images taller than 3000 pixels are uploaded as multiple
 vertical chunks, and retries add backoff after a failed request. Nearby-block
 grouping is local and normally negligible. Scans are deliberately
 single-worker to keep memory use and service load reasonable on e-readers.

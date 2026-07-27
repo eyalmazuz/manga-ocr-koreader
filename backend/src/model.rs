@@ -6,7 +6,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::archive::ArchiveManifest;
+use crate::input::InputManifest;
 
 pub const MOKURO_FORMAT_VERSION: &str = "0.2.0";
 pub const INTEGRATION_SCHEMA_VERSION: u32 = 1;
@@ -58,10 +58,12 @@ pub struct MangaOcrMetadata {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct FailedPage {
-    /// One-based index in the naturally sorted archive image list.
+    /// One-based page ordinal in the source document.
     pub index: usize,
     pub img_path: String,
     pub error: String,
+    #[serde(default)]
+    pub service_failure: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -80,7 +82,7 @@ pub struct EngineMetadata {
 
 impl MokuroDocument {
     #[must_use]
-    pub fn empty(input: &Path, manifest: &ArchiveManifest, language: &str) -> Self {
+    pub fn empty(input: &Path, manifest: &InputManifest, language: &str) -> Self {
         let volume = path_display_name(input);
         let title = input
             .parent()
@@ -99,9 +101,12 @@ impl MokuroDocument {
             mangaocr: MangaOcrMetadata {
                 schema_version: INTEGRATION_SCHEMA_VERSION,
                 source: SourceMetadata {
-                    fingerprint_algorithm: "sha256:zip-image-manifest-v1".to_owned(),
+                    fingerprint_algorithm: manifest.fingerprint_algorithm.clone(),
                     fingerprint: manifest.fingerprint.clone(),
-                    archive_size: manifest.archive_size,
+                    // Retain this serialized field name so existing ZIP caches
+                    // remain resumable. For other inputs it is the original
+                    // source document's size.
+                    archive_size: manifest.source_size,
                     image_count: manifest.entries.len(),
                 },
                 engine: EngineMetadata {
@@ -176,6 +181,8 @@ pub struct ScanStatus {
     pub failed: usize,
     pub failures: Vec<FailedPage>,
     pub page: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_index: Option<usize>,
     pub error: Option<String>,
     pub output: PathBuf,
 }
@@ -191,6 +198,7 @@ impl ScanStatus {
             failed: 0,
             failures: Vec::new(),
             page: None,
+            page_index: None,
             error: None,
             output,
         }
@@ -203,21 +211,18 @@ mod tests {
 
     use serde_json::json;
 
-    use crate::archive::{ArchiveManifest, ImageEntry};
+    use crate::input::{InputManifest, PageEntry, ZIP_FINGERPRINT_ALGORITHM};
 
     use super::{MokuroDocument, ScanStatus};
 
     #[test]
     fn serializes_top_level_schema_placeholders_and_status_contract() {
-        let manifest = ArchiveManifest {
-            archive_size: 123,
+        let manifest = InputManifest {
+            source_size: 123,
+            fingerprint_algorithm: ZIP_FINGERPRINT_ALGORITHM.to_owned(),
             fingerprint: "fingerprint".to_owned(),
-            entries: vec![ImageEntry {
-                archive_index: 0,
+            entries: vec![PageEntry {
                 path: "page1.jpg".to_owned(),
-                uncompressed_size: 100,
-                compressed_size: 80,
-                crc32: 1,
             }],
         };
         let document = MokuroDocument::empty(Path::new("/Manga/Volume 1.cbz"), &manifest, "ja");
@@ -232,12 +237,46 @@ mod tests {
         );
         assert_eq!(value["mangaocr"]["language"], json!("ja"));
         assert_eq!(value["mangaocr"]["failed_pages"], json!([]));
+        assert_eq!(
+            value["mangaocr"]["source"]["fingerprint_algorithm"],
+            json!(ZIP_FINGERPRINT_ALGORITHM)
+        );
+        assert_eq!(value["mangaocr"]["source"]["archive_size"], json!(123));
 
         let status = ScanStatus::new(PathBuf::from("/cache/volume.mokuro"));
         let status_value = serde_json::to_value(status).expect("serialize status");
         assert_eq!(status_value["succeeded"], json!(0));
         assert_eq!(status_value["failed"], json!(0));
         assert_eq!(status_value["failures"], json!([]));
+        assert!(status_value.get("page_index").is_none());
         assert_eq!(status_value["output"], json!("/cache/volume.mokuro"));
+    }
+
+    #[test]
+    fn old_failure_records_default_to_local_failures() {
+        let failure: super::FailedPage = serde_json::from_value(json!({
+            "index": 1,
+            "img_path": "page.png",
+            "error": "unreadable"
+        }))
+        .expect("decode legacy failure");
+        assert!(!failure.service_failure);
+    }
+
+    #[test]
+    fn status_exposes_the_document_ordinal_and_service_failure_kind() {
+        let mut status = ScanStatus::new(PathBuf::from("/cache/volume.mokuro"));
+        status.page = Some("page-000004.png".to_owned());
+        status.page_index = Some(4);
+        status.failures.push(super::FailedPage {
+            index: 4,
+            img_path: "page-000004.png".to_owned(),
+            error: "service unavailable".to_owned(),
+            service_failure: true,
+        });
+
+        let value = serde_json::to_value(status).expect("serialize status");
+        assert_eq!(value["page_index"], json!(4));
+        assert_eq!(value["failures"][0]["service_failure"], json!(true));
     }
 }

@@ -3,7 +3,7 @@ use std::{collections::HashSet, fs, path::Path};
 use anyhow::{Context, Result, bail};
 
 use crate::{
-    archive::ImageEntry,
+    input::PageEntry,
     model::{MokuroDocument, MokuroPage},
 };
 
@@ -23,7 +23,7 @@ pub enum ForceScope {
 pub fn prepare_document(
     output_path: &Path,
     mut expected: MokuroDocument,
-    entries: &[ImageEntry],
+    entries: &[PageEntry],
     force_scope: ForceScope,
 ) -> Result<MokuroDocument> {
     if !output_path.exists() {
@@ -80,7 +80,7 @@ pub fn prepare_document(
 pub fn validate_compatible(
     existing: &MokuroDocument,
     expected: &MokuroDocument,
-    entries: &[ImageEntry],
+    entries: &[PageEntry],
 ) -> Result<()> {
     if existing.mangaocr.schema_version != expected.mangaocr.schema_version
         || existing.mangaocr.source != expected.mangaocr.source
@@ -107,7 +107,7 @@ pub fn validate_compatible(
 
 fn normalized_failures(
     document: &MokuroDocument,
-    entries: &[ImageEntry],
+    entries: &[PageEntry],
 ) -> Vec<crate::model::FailedPage> {
     let mut seen = HashSet::new();
     document
@@ -127,7 +127,7 @@ fn normalized_failures(
         .collect()
 }
 
-fn validate_page(page: &MokuroPage, entry: &ImageEntry, index: usize) -> Result<()> {
+fn validate_page(page: &MokuroPage, entry: &PageEntry, index: usize) -> Result<()> {
     if page.img_path != entry.path {
         bail!(
             "page {} path changed from {:?} to {:?}",
@@ -162,26 +162,23 @@ mod tests {
     use tempfile::tempdir;
 
     use crate::{
-        archive::{ArchiveManifest, ImageEntry},
         atomic::write_json_atomic,
+        input::{InputManifest, PageEntry, ZIP_FINGERPRINT_ALGORITHM},
         model::{FailedPage, MOKURO_FORMAT_VERSION, MokuroBlock, MokuroDocument, MokuroPage},
     };
 
     use super::{ForceScope, prepare_document};
 
-    fn entry(index: usize, path: &str) -> ImageEntry {
-        ImageEntry {
-            archive_index: index,
+    fn entry(path: &str) -> PageEntry {
+        PageEntry {
             path: path.to_owned(),
-            uncompressed_size: 100,
-            compressed_size: 80,
-            crc32: u32::try_from(index).unwrap_or(u32::MAX),
         }
     }
 
-    fn expected(entries: &[ImageEntry]) -> MokuroDocument {
-        let manifest = ArchiveManifest {
-            archive_size: 200,
+    fn expected(entries: &[PageEntry]) -> MokuroDocument {
+        let manifest = InputManifest {
+            source_size: 200,
+            fingerprint_algorithm: ZIP_FINGERPRINT_ALGORITHM.to_owned(),
             fingerprint: "abc123".to_owned(),
             entries: entries.to_vec(),
         };
@@ -206,7 +203,7 @@ mod tests {
 
     #[test]
     fn compatible_partial_resumes_without_losing_page_indices() {
-        let entries = vec![entry(0, "1.jpg"), entry(1, "2.jpg"), entry(2, "10.jpg")];
+        let entries = vec![entry("1.jpg"), entry("2.jpg"), entry("10.jpg")];
         let mut partial = expected(&entries);
         partial.pages[1] = Some(page("2.jpg"));
 
@@ -224,7 +221,7 @@ mod tests {
 
     #[test]
     fn forcing_one_page_preserves_other_compatible_records() {
-        let entries = vec![entry(0, "1.jpg"), entry(1, "2.jpg")];
+        let entries = vec![entry("1.jpg"), entry("2.jpg")];
         let mut partial = expected(&entries);
         partial.pages[0] = Some(page("1.jpg"));
         partial.pages[1] = Some(page("2.jpg"));
@@ -242,13 +239,14 @@ mod tests {
 
     #[test]
     fn mutable_failure_records_are_copied_without_affecting_compatibility() {
-        let entries = vec![entry(0, "1.jpg"), entry(1, "2.jpg")];
+        let entries = vec![entry("1.jpg"), entry("2.jpg")];
         let mut partial = expected(&entries);
         partial.pages[0] = Some(page("1.jpg"));
         partial.mangaocr.failed_pages.push(FailedPage {
             index: 2,
             img_path: "2.jpg".to_owned(),
             error: "temporary outage".to_owned(),
+            service_failure: true,
         });
 
         let directory = tempdir().expect("temporary directory");

@@ -449,7 +449,11 @@ function Worker.start(options, listener)
             or type(options.input) ~= "string"
             or type(options.output) ~= "string"
             or type(options.status) ~= "string"
-            or type(options.log) ~= "string" then
+            or type(options.log) ~= "string"
+            or (
+                options.rendered_pages ~= nil
+                and type(options.rendered_pages) ~= "string"
+            ) then
         return nil, "Invalid OCR worker options"
     end
 
@@ -488,12 +492,19 @@ function Worker.start(options, listener)
         "--status", options.status,
         "--language", options.language or "ja",
     }
+    if options.rendered_pages then
+        arguments[#arguments + 1] = "--rendered-pages"
+        arguments[#arguments + 1] = options.rendered_pages
+    end
     if options.page then
         arguments[#arguments + 1] = "--page"
         arguments[#arguments + 1] = tostring(options.page)
     end
     if options.force then
         arguments[#arguments + 1] = "--force"
+    end
+    if options.reset then
+        arguments[#arguments + 1] = "--reset"
     end
     if options.retry_failed then
         arguments[#arguments + 1] = "--retry-failed"
@@ -622,6 +633,8 @@ function Worker.start(options, listener)
         status = options.status,
         log = options.log,
         page = options.page,
+        reset = options.reset,
+        rendered_pages = options.rendered_pages,
         temporary_binary = binary_is_temporary and binary or nil,
         listeners = listener and { listener } or {},
     }
