@@ -13,6 +13,7 @@ local HorizontalGroup = require("ui/widget/horizontalgroup")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local MovableContainer = require("ui/widget/container/movablecontainer")
 local RegionLayout = require("MangaOCRRegionLayout")
+local RenderText = require("ui/rendertext")
 local Selection = require("MangaOCRSelection")
 local ScrollTextWidget = require("ui/widget/scrolltextwidget")
 local Size = require("ui/size")
@@ -65,6 +66,22 @@ local function verticalMetrics(lines, font_size)
         line_height = line_height,
         width = #lines * column_width,
         height = max_characters * line_height,
+    }
+end
+
+local function horizontalMetrics(lines, font_size)
+    local face = Font:getFace("cfont", font_size)
+    local width = 1
+    for _, line in ipairs(lines) do
+        width = math.max(
+            width,
+            RenderText:sizeUtf8Text(0, false, face, line, true).x
+        )
+    end
+    return {
+        face = face,
+        width = width,
+        height = #lines * math.max(1, math.floor(face.size * 1.3 + 0.5)),
     }
 end
 
@@ -205,7 +222,69 @@ function TextPopup:init()
         end
     end
 
-    if not self.vertical_popup then
+    if is_region and not self.content_widget then
+        local lines = RegionLayout.horizontalLines(self.lines, self.text)
+        if #lines > 0 then
+            local maximum_content_width = math.max(
+                1,
+                math.floor(Screen:getWidth() * REGION_WIDTH_RATIO)
+                    - 2 * padding - 2 * border
+            )
+            local maximum_content_height = math.max(
+                1,
+                math.floor(Screen:getHeight() * REGION_HEIGHT_RATIO)
+                    - 2 * padding - 2 * border
+            )
+            local metrics = horizontalMetrics(lines, font_size)
+            while font_size > MIN_REGION_FONT_SIZE
+                    and (metrics.width > content_width
+                        or metrics.height > content_height) do
+                font_size = font_size - 1
+                metrics = horizontalMetrics(lines, font_size)
+            end
+            while font_size > ABSOLUTE_MIN_REGION_FONT_SIZE
+                    and (metrics.width > maximum_content_width
+                        or metrics.height > maximum_content_height) do
+                font_size = font_size - 1
+                metrics = horizontalMetrics(lines, font_size)
+            end
+
+            content_width = math.min(
+                maximum_content_width,
+                math.max(content_width, metrics.width)
+            )
+            content_height = math.min(
+                maximum_content_height,
+                math.max(content_height, metrics.height)
+            )
+            self.text_widget = ScrollTextWidget:new{
+                text = table.concat(lines, "\n"),
+                face = metrics.face,
+                width = content_width,
+                height = content_height,
+                scroll_bar_width = 0,
+                text_scroll_span = 0,
+                dialog = self,
+                justified = false,
+                para_direction_rtl = false,
+                auto_para_direction = false,
+                alignment = "center",
+                alignment_strict = true,
+                lang = language,
+                highlight_text_selection = true,
+            }
+            self.text_widgets[1] = self.text_widget.text_widget
+            if language:match("^ja") then
+                Selection.enableExactXtextRanges(
+                    self.text_widget.text_widget,
+                    1
+                )
+            end
+            self.content_widget = self.text_widget
+        end
+    end
+
+    if not self.content_widget then
         self.text_widget = ScrollTextWidget:new{
             -- TextBoxWidget cannot reliably start a touch selection on a glyph
             -- flush with the beginning of the text. Leading spaces provide a

@@ -36,6 +36,21 @@ function Layout.verticalColumnText(text)
     return table.concat(characters, "\n")
 end
 
+function Layout.horizontalLines(lines, fallback)
+    local normalized = {}
+    if type(lines) == "table" then
+        for _, line in ipairs(lines) do
+            if type(line) == "string" and line ~= "" then
+                normalized[#normalized + 1] = line
+            end
+        end
+    end
+    if #normalized == 0 and type(fallback) == "string" and fallback ~= "" then
+        normalized[1] = fallback
+    end
+    return normalized
+end
+
 function Layout.orderedVerticalLines(lines)
     if type(lines) ~= "table" then
         return {}

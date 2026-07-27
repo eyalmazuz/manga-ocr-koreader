@@ -19,6 +19,17 @@ describe("Manga OCR region layout", function()
         assert.are.equal("", Layout.verticalColumnText(false))
     end)
 
+    it("preserves horizontal OCR rows and filters malformed values", function()
+        assert.are.same(
+            { "first", "second" },
+            Layout.horizontalLines({ "first", false, "", "second" }, "fallback")
+        )
+        assert.are.same(
+            { "fallback" },
+            Layout.horizontalLines(nil, "fallback")
+        )
+    end)
+
     it("places vertical lines from right to left", function()
         assert.are.same(
             { "右", "中", "左" },
