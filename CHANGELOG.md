@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-08-13
+
+### Fixed
+
+- Reconstruct vertical Japanese columns when OCR returns overlapping row and
+  column fragments for the same text, removing duplicated or scrambled popup
+  and bottom-panel output without requiring a rescan.
+- Rejoin adjacent vertical text blocks when small reading annotations distort
+  their reported font sizes, while preserving the existing furigana toggle.
+
 ## [0.4.1] - 2026-07-28
 
 ### Fixed

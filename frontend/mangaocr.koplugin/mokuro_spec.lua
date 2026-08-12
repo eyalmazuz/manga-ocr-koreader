@@ -74,6 +74,83 @@ describe("Mokuro schema helpers", function()
         )
     end)
 
+    it("reconstructs vertical columns from overlapping OCR fragments", function()
+        local data = assert(Mokuro.decode([=[
+            {
+                "pages": [{
+                    "img_width": 100,
+                    "img_height": 100,
+                    "blocks": [{
+                        "box": [10,0,80,70],
+                        "vertical": false,
+                        "font_size": 20,
+                        "lines": ["甲乙か","い丙","だ","...","丙だ"],
+                        "lines_coords": [
+                            [[10,0],[70,0],[70,20],[10,20]],
+                            [[10,22],[70,22],[70,42],[10,42]],
+                            [[50,44],[80,44],[80,60],[50,60]],
+                            [[10,44],[18,44],[18,70],[10,70]],
+                            [[52,22],[70,22],[70,64],[52,64]]
+                        ]
+                    }]
+                }]
+            }
+        ]=]))
+
+        local block = Mokuro.getPage(data, 1).blocks[1]
+        assert.is_true(block.vertical)
+        assert.are.same({ "乙丙だ", "甲い..." }, block.lines)
+        assert.are.equal("乙丙だ甲い...", Mokuro.getBlockText(block))
+    end)
+
+    it("repairs adjacent vertical blocks split by reading annotations", function()
+        local data = assert(Mokuro.decode([=[
+            {
+                "pages": [{
+                    "img_width": 200,
+                    "img_height": 300,
+                    "blocks": [
+                        {
+                            "box": [80,20,140,170],
+                            "vertical": true,
+                            "font_size": 26,
+                            "lines": ["よみ","本文一","かな","本文二"],
+                            "lines_coords": [
+                                [[128,20],[140,20],[140,45],[128,45]],
+                                [[105,20],[130,20],[130,165],[105,165]],
+                                [[100,65],[112,65],[112,105],[100,105]],
+                                [[80,20],[106,20],[106,145],[80,145]]
+                            ]
+                        },
+                        {
+                            "box": [40,22,80,200],
+                            "vertical": true,
+                            "font_size": 12,
+                            "lines": ["よみ","かな","本文三"],
+                            "lines_coords": [
+                                [[68,22],[80,22],[80,45],[68,45]],
+                                [[69,140],[79,140],[79,165],[69,165]],
+                                [[40,25],[68,25],[68,200],[40,200]]
+                            ]
+                        }
+                    ]
+                }]
+            }
+        ]=]))
+
+        local page = Mokuro.getPage(data, 1)
+        assert.are.equal(1, #page.blocks)
+        assert.are.same(
+            { "よみ", "本文一", "かな", "本文二", "よみ", "かな", "本文三" },
+            page.blocks[1].lines
+        )
+
+        local filtered = Mokuro.getPage(Mokuro.withoutFurigana(data), 1)
+        assert.are.equal(1, #filtered.blocks)
+        assert.are.same({ "本文一", "本文二", "本文三" }, filtered.blocks[1].lines)
+        assert.are.equal("本文一本文二本文三", Mokuro.getBlockText(filtered.blocks[1]))
+    end)
+
     it("hides only small kana positioned as furigana beside kanji", function()
         local raw = assert(Mokuro.decode([=[
             {

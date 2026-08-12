@@ -324,6 +324,29 @@ struct BlockAxes {
 impl BlockAxes {
     fn from_block(block: &MokuroBlock) -> Self {
         let [min_x, min_y, max_x, max_y] = block.box_;
+        let mut line_thicknesses: Vec<_> = block
+            .lines_coords
+            .iter()
+            .map(polygon_bounds)
+            .map(|[line_min_x, line_min_y, line_max_x, line_max_y]| {
+                if block.vertical {
+                    (line_max_x - line_min_x).unsigned_abs()
+                } else {
+                    (line_max_y - line_min_y).unsigned_abs()
+                }
+            })
+            .filter(|thickness| *thickness > 0)
+            .collect();
+        line_thicknesses.sort_unstable();
+        // Lens includes small reading annotations in the same paragraph as
+        // main text. A lower median can make two adjacent columns appear to
+        // have incompatible font sizes, so use the upper quartile as the
+        // representative main-text thickness for grouping only.
+        let representative_font = if line_thicknesses.is_empty() {
+            block.font_size.max(1)
+        } else {
+            line_thicknesses[((line_thicknesses.len() * 3 - 1) / 4).min(line_thicknesses.len() - 1)]
+        };
         let (main_min, main_max, cross_min, cross_max) = if block.vertical {
             (min_y, max_y, min_x, max_x)
         } else {
@@ -331,7 +354,7 @@ impl BlockAxes {
         };
         Self {
             vertical: block.vertical,
-            font_size: f64::from(block.font_size.max(1)),
+            font_size: f64::from(representative_font),
             main_min: f64::from(main_min),
             main_max: f64::from(main_max),
             cross_min: f64::from(cross_min),
@@ -1013,6 +1036,48 @@ mod tests {
         assert_eq!(grouped.len(), 1);
         assert_eq!(grouped[0].lines, ["一", "二", "三", "四", "五", "六", "七"]);
         assert_eq!(grouped[0].box_, [32, 17, 200, 425]);
+    }
+
+    #[test]
+    fn groups_adjacent_columns_using_main_text_thickness() {
+        let blocks = vec![
+            MokuroBlock::new(
+                [80, 20, 140, 170],
+                true,
+                26,
+                vec![
+                    polygon([[128, 20], [140, 20], [140, 45], [128, 45]]),
+                    polygon([[105, 20], [130, 20], [130, 165], [105, 165]]),
+                    polygon([[92, 65], [104, 65], [104, 105], [92, 105]]),
+                    polygon([[80, 20], [106, 20], [106, 145], [80, 145]]),
+                ],
+                vec![
+                    "よみ".to_owned(),
+                    "本文一".to_owned(),
+                    "かな".to_owned(),
+                    "本文二".to_owned(),
+                ],
+            ),
+            MokuroBlock::new(
+                [40, 22, 80, 200],
+                true,
+                12,
+                vec![
+                    polygon([[68, 22], [80, 22], [80, 45], [68, 45]]),
+                    polygon([[69, 140], [79, 140], [79, 165], [69, 165]]),
+                    polygon([[40, 25], [68, 25], [68, 200], [40, 200]]),
+                ],
+                vec!["よみ".to_owned(), "かな".to_owned(), "本文三".to_owned()],
+            ),
+        ];
+
+        let grouped = group_nearby_blocks(blocks, "ja");
+
+        assert_eq!(grouped.len(), 1);
+        assert_eq!(
+            grouped[0].lines,
+            ["よみ", "本文一", "かな", "本文二", "よみ", "かな", "本文三"]
+        );
     }
 
     #[test]
